@@ -1,0 +1,143 @@
+{
+ "name": "books-best-pick",
+ "engine": "web",
+ "about": "Find the best-fitting book in one books.toscrape.com category: collect the page, keep books at or under a price, rank them for a reader's goal with Jev, then pick one. Params: category, max_price, want.",
+ "read_only": true,
+ "params": {
+  "category": "Travel",
+  "max_price": "45",
+  "want": "a light, practical read for someone planning their first trip abroad"
+ },
+ "start_url": "https://books.toscrape.com/",
+ "allow_domains": [
+  "books.toscrape.com"
+ ],
+ "output": "best",
+ "mapped": {
+  "on": "2026-10-24",
+  "by": "Jev kit (agent mapping with web.py snapshot and step --record)"
+ },
+ "steps": [
+  {
+   "id": "home",
+   "do": "goto",
+   "url": "https://books.toscrape.com/",
+   "expect": {
+    "all": [
+     "All products"
+    ],
+    "title_contains": "Books to Scrape"
+   }
+  },
+  {
+   "id": "open-category",
+   "do": "click",
+   "target": {
+    "role": "link",
+    "name": "{category}",
+    "exact": true
+   },
+   "expect": {
+    "all": [
+     "{category}"
+    ],
+    "title_contains": "{category}"
+   }
+  },
+  {
+   "id": "collect-books",
+   "do": "collect",
+   "rows": {
+    "css": "article.product_pod"
+   },
+   "fields": {
+    "title": {
+     "css": "h3 a",
+     "attr": "title"
+    },
+    "price": {
+     "css": "p.price_color"
+    },
+    "rating": {
+     "css": "p.star-rating",
+     "attr": "class",
+     "regex": "star-rating (\\w+)",
+     "map": {
+      "One": "1/5",
+      "Two": "2/5",
+      "Three": "3/5",
+      "Four": "4/5",
+      "Five": "5/5"
+     }
+    },
+    "link": {
+     "css": "h3 a",
+     "attr": "href"
+    }
+   },
+   "max": 40,
+   "next": {
+    "role": "link",
+    "name": "next",
+    "exact": true
+   },
+   "pages": 2,
+   "save_as": "books"
+  },
+  {
+   "id": "affordable",
+   "do": "filter",
+   "from": "books",
+   "where": [
+    {
+     "field": "price",
+     "lte": "{max_price}"
+    }
+   ],
+   "save_as": "affordable"
+  },
+  {
+   "id": "rank-fit",
+   "do": "rank",
+   "from": "affordable",
+   "instructions": "How well does this book suit the reader's goal given in context? Judge from the title, price and star rating.",
+   "levels": [
+    "poor fit",
+    "partial fit",
+    "good fit",
+    "excellent fit"
+   ],
+   "fields": [
+    "title",
+    "price",
+    "rating"
+   ],
+   "context": {
+    "reader_goal": "{want}"
+   },
+   "save_as": "ranked"
+  },
+  {
+   "id": "shortlist",
+   "do": "take",
+   "from": "ranked",
+   "n": 3,
+   "save_as": "shortlist"
+  },
+  {
+   "id": "best",
+   "do": "choose",
+   "from": "shortlist",
+   "instructions": "These books are already shortlisted for the reader. Which one is the closest fit for the reader goal in context? Choose the closest one even if none is a perfect match.",
+   "label_fields": [
+    "title",
+    "price",
+    "rating"
+   ],
+   "context": {
+    "reader_goal": "{want}"
+   },
+   "save_as": "best"
+  }
+ ]
+}

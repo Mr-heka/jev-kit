@@ -1,0 +1,33 @@
+{
+ "name": "calculator-multiply",
+ "engine": "screen",
+ "app": "Calculator",
+ "about": "Multiply two whole numbers in the macOS Calculator (Basic mode) and read the result. A harmless live demo of the screen engine: taps, typing, a read, a code check and one Jev check.",
+ "read_only": true,
+ "params": {"a": "7", "b": "6"},
+ "notes": "Mapped on macOS 26 Calculator, Basic mode. OCR sees AC, × (as X or x) and = but not 0, 4, + or ÷, so digits are typed and the operators tapped. Clear is Escape twice (the first press clears the entry, the second clears all); mid-entry the clear button shows 'C', which OCR misses, so tapping it was fragile. The display reads a lone 0 as 'O'. Positive whole numbers only: a leading '-' would press minus.",
+ "steps": [
+  {"id": "open", "do": "open_app", "app": "Calculator"},
+  {"id": "clear", "do": "key", "keys": ["escape", "escape"]},
+  {"id": "type-a", "do": "type", "text": "{a}"},
+  {"id": "times", "do": "tap", "target": {"regex": "^[×xX*]$", "region": [0.75, 0.45, 1, 0.6]}},
+  {"id": "type-b", "do": "type", "text": "{b}"},
+  {"id": "equals", "do": "tap", "target": {"text": "=", "match": "exact", "region": [0.75, 0.85, 1, 1]},
+   "expect": {"none": ["Error", "Not a number"]}},
+  {"id": "read-result", "do": "read", "save_as": "result", "region": [0, 0.12, 1, 0.33], "lines": true,
+   "fields": {
+    "value": {"regex": "^[\\d,]+(?:\\.\\d+)?$", "region": [0, 0.12, 1, 0.33], "pick": "largest", "required": true},
+    "expression": {"regex": "^[\\d.,]+\\s*[×xX*]\\s*[\\d.,]+$", "number": false, "region": [0, 0.12, 1, 0.33]}
+   }},
+  {"id": "check-product", "do": "check", "from": "result",
+   "where": [{"field": "value", "gte": {"calc": "{a}*{b}"}, "lte": {"calc": "{a}*{b}"}}]},
+  {"id": "looks-finished", "do": "check",
+   "judge": {"type": "noul", "instructions": "Is this a calculator showing a finished result?",
+    "criteria": {"true": "The display shows a completed sum: an expression such as 7x6 with its answer below it",
+                 "false": "The display is blank, shows only one number being typed, or shows an error"},
+    "region": [0, 0.12, 1, 0.33],
+    "context": {"app": "macOS Calculator", "screen_text_is": "OCR of the display, top line first"},
+    "threshold": 0.8}}
+ ],
+ "mapped": {"on": "2026-10-24", "by": "agent", "with": "screen.py screen --boxes, then step --record"}
+}
