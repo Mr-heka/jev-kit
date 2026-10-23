@@ -98,8 +98,12 @@ independent decisions at once: `jev.py batch manifest.json` (dry run), then
 
 - **No buying, sending, posting, booking or deleting without the user's yes** for
   that exact action. The engines stop at any such button. Show the user what
-  will happen, record their words with `jev.py approve <id> --quote "..."`, then
-  rerun with `--approved <id>`. One approval covers one run.
+  will happen, record their words with
+  `jev.py approve <id> --recipe <name> --quote "..."`, then rerun with
+  `--approved <id>`. One approval covers one run of that one recipe.
+- **Mark commits the guard cannot see.** The guard reads button text. When mapping,
+  set `"publish": true` on any step whose button commits something under a neutral
+  name ("Continue", "Next", "Confirm" icons).
 - **No passwords, codes or card numbers typed by the kit.** No CAPTCHAs or
   "are you human" checks: the run stops and the user does it.
 - **Send Jev the minimum.** The few fields the judgment needs, not whole pages,

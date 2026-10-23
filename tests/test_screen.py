@@ -316,8 +316,20 @@ class TestEngine(EngineCase):
                               "safe_because": "test fixture"}], FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]))
         self.assertEqual(ok["status"], "done")
 
+    def test_typed_keys_respect_secret_labels(self):
+        io = FakeIO(KEYPAD + [box("PIN", 20, 400, 30, 16)])
+        res = self.run_steps([{"id": "pin", "do": "key", "keys": ["1", "2"]}], io)
+        self.assertEqual(res["status"], "needs_human")
+        self.assertEqual(io.keys, [])
+
+    def test_denied_by_bundle_id(self):
+        self.assertTrue(screen.denied_app("com.apple.MobileSMS"))
+        self.assertTrue(screen.denied_app("com.bitwarden.desktop"))
+        self.assertTrue(screen.denied_app("com.mitchellh.ghostty"))
+        self.assertFalse(screen.denied_app("com.apple.calculator"))
+
     def test_approval_allows_once_then_is_used(self):
-        common.approve("calc-ok", "yes, send it")
+        common.approve("calc-ok", "yes, send it", "test")
         step = [{"id": "send", "do": "tap", "target": {"text": "Send"}, "publish": True}]
         io = FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)])
         self.assertEqual(self.run_steps(step, io, approved="calc-ok")["status"], "done")

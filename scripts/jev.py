@@ -159,8 +159,14 @@ def cmd_judge(args: argparse.Namespace) -> dict[str, Any]:
     out = _new_output(args.out)
     budget = common.Budget(args.max_jev_calls, args.max_jev_cost)
     started = time.monotonic()
-    where = json.loads(args.where) if args.where else []
-    kept = common.filter_items(items, where if isinstance(where, list) else [where]) if where else items
+    try:
+        where = json.loads(args.where) if args.where else []
+    except ValueError:
+        raise Stop("--where is not valid JSON, e.g. '[{\"field\": \"price\", \"lte\": 20}]'") from None
+    where = where if isinstance(where, list) else [where]
+    if not all(isinstance(c, dict) and isinstance(c.get("field"), str) for c in where):
+        raise Stop("every --where condition needs a \"field\"")
+    kept = common.filter_items(items, where) if where else items
     report: dict[str, Any] = {"items": len(items), "after_filter": len(kept)}
     if not kept:
         return {"status": "done", **report, "ranked": [], "note": "nothing passed the filter; Jev not called"}
@@ -205,9 +211,9 @@ def cmd_save(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_approve(args: argparse.Namespace) -> dict[str, Any]:
-    entry = common.approve(args.id, args.quote)
+    entry = common.approve(args.id, args.quote, args.recipe)
     return {"status": "done", "approval": entry,
-            "note": f"valid once, for {common.APPROVAL_HOURS} hours: rerun with --approved {args.id}"}
+            "note": f"valid once, for {common.APPROVAL_HOURS} hours, for {args.recipe} only: rerun with --approved {args.id}"}
 
 
 # ------------------------------------------------------------------ main
@@ -265,6 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("approve", help="record the user's yes for one publishing run")
     p.add_argument("id")
+    p.add_argument("--recipe", required=True, help="the recipe this yes covers ('step' for one-off steps)")
     p.add_argument("--quote", required=True)
     p.set_defaults(fn=cmd_approve)
     return parser

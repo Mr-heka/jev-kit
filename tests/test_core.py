@@ -137,28 +137,41 @@ class Guard(TempHome):
         self.assertIsNone(common.guard_click("The Book of Days", {"id": "x"}, None))
 
     def test_safe_because_only_for_fixed_targets(self):
-        step = {"id": "x", "safe_because": "search box button"}
+        step = {"id": "x", "safe_because": "search box button", "target": {"name": "Submit"}}
         self.assertIn("allowed", common.guard_click("Submit", step, None))
+        self.assertIn("allowed", common.guard_click("Submit | Submit", step, None))
+        for label in ("Place order", "Submit | Place order"):  # the button changed since mapping
+            with self.assertRaises(Stop):
+                common.guard_click(label, step, None)
         with self.assertRaises(Stop):
             common.guard_click("Submit", step, None, picked=True)
+        with self.assertRaises(Stop):  # money words never get the pass
+            common.guard_click("Pay", {"id": "x", "safe_because": "x", "target": {"name": "Pay"}}, None)
 
     def test_approval_is_single_use(self):
         with self.assertRaises(Stop):
-            common.approve("a", "yes")
-        common.approve("post-1", "Yes, post it at 6pm")
-        self.assertIn("approved", common.guard_click("Post", {"id": "x", "publish": True}, "post-1"))
+            common.approve("a", "yes", "demo")
+        with self.assertRaises(Stop):
+            common.approve("post-1", "yes", " ")
+        common.approve("post-1", "Yes, post it at 6pm", "demo")
+        with self.assertRaises(Stop):  # bound to its recipe
+            common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe="other")
+        self.assertIn("approved", common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe="demo"))
         common.consume_approval("post-1")
         with self.assertRaises(Stop):
             common.guard_click("Post", {"id": "x", "publish": True}, "post-1")
 
     def test_human_gates(self):
-        with self.assertRaises(Stop):
-            common.check_human_gate("Please verify you are human")
+        for text in ("Please verify you are human", "Enter the code we sent to your phone", "Enter the 6-digit code"):
+            with self.assertRaises(Stop):
+                common.check_human_gate(text)
         common.check_human_gate("Search results for flights")
 
     def test_expect_text(self):
         ok, _ = common.expect_text({"all": ["Results"], "none": ["Log in"]}, "12 results found")
         self.assertTrue(ok)
+        self.assertFalse(common.expect_text({"all": "Order placed"}, "the quick brown fox")[0], "a string is one phrase")
+        self.assertTrue(common.expect_text({"all": "Order placed"}, "Your order placed ok. Order placed")[0])
         ok, why = common.expect_text({"any": ["Cart", "Basket"]}, "Home page")
         self.assertFalse(ok)
         self.assertIn("none of", why)
@@ -217,6 +230,10 @@ class JevMoves(TempHome):
         result = log.finish(budget)
         self.assertEqual(result["status"], "done")
         self.assertTrue(Path(result["log"]).exists())
+
+    def test_run_log_name_cannot_escape(self):
+        log = common.RunLog({"name": "../../escaped", "_params": {}}, "web")
+        self.assertTrue(log.path.resolve().is_relative_to(common.RUNS.resolve()))
 
     def test_parse_number(self):
         self.assertEqual(common.parse_number("£1,299.50"), 1299.5)

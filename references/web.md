@@ -131,5 +131,5 @@ wording fix after the first live runs.
 - Playwright's driver prints Node deprecation warnings on attach. The engine sets `NODE_NO_WARNINGS=1`.
 - The books recipe takes about 2.4 s inside the run, plus about 0.6 s to start its own
   browser when no session is open. About 1.6 s of the 2.4 s is Jev (8 calls, 4 at a time).
-- books.toscrape.com shows "Add to basket" on every book. The guard word list does not
-  cover "add to basket". The site is read-only practice, but treat basket buttons as `publish` on real shops.
+- The guard reads button and link text. A button with a neutral name ("Continue",
+  "Next", an icon) that commits something is invisible to it: mark that step `publish: true` when mapping.

@@ -44,10 +44,13 @@ KIT_PYTHON = Path.home() / ".venvs" / "jev-kit" / "bin" / "python"
 
 # Apps the engine never opens or drives. A recipe cannot override this.
 DENIED_NAMES = {"messages", "mobilesms", "mail", "wallet", "systemsettings", "systempreferences", "keychainaccess",
-                "passwords", "terminal", "iterm", "iterm2", "warp", "warpstable"}
+                "passwords", "terminal", "iterm", "iterm2", "warp", "warpstable", "ghostty", "alacritty", "kitty",
+                "wezterm", "wezgui", "hyper", "tabby", "console", "activitymonitor", "screensharing"}
 DENIED_PARTS = ("1password", "keeper", "bitwarden", "bank")
 DENIED_SHOWN = ["Messages", "Mail", "Wallet", "System Settings", "System Preferences", "Keychain Access", "Passwords",
-                "1Password", "Keeper", "Bitwarden", "Terminal", "iTerm2", "Warp", "any app with 'bank' in its name"]
+                "1Password", "Keeper", "Bitwarden", "Terminal", "iTerm2", "Warp", "Ghostty", "Alacritty", "kitty",
+                "WezTerm", "Hyper", "Tabby", "Console", "Activity Monitor", "Screen Sharing",
+                "any app with 'bank' in its name or bundle id"]
 # Labels that mean the field wants a secret. The kit never types into those.
 SECRET_LABEL = re.compile(
     r"pass(?:word|code|phrase)|\bpin\b|one[- ]?time (?:pass)?code|\botp\b|verification code|security code|"
@@ -84,10 +87,11 @@ class SetupError(Exception):
 
 def denied_app(name: str | None) -> bool:
     raw = re.sub(r"\.app/?$", "", Path(str(name or "").strip().rstrip("/")).name, flags=re.I).lower()
+    full = raw
     if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", raw):  # a bundle id: com.apple.MobileSMS
         raw = raw.rsplit(".", 1)[-1]
     compact = re.sub(r"[^a-z0-9]", "", raw)
-    return compact in DENIED_NAMES or any(p in raw for p in DENIED_PARTS)
+    return compact in DENIED_NAMES or any(p in full for p in DENIED_PARTS)
 
 
 def norm(text: str) -> str:
@@ -260,7 +264,7 @@ def parse_combo(combo: str) -> tuple[list[tuple[int, int]], int | None, str]:
 def submit_label(combo: str) -> str | None:
     """Keys that submit, send or delete get the same guard as a click on such a button."""
     mods, _code, key = parse_combo(combo)
-    if key in ("return", "enter"):
+    if key in ("return", "enter", "space"):  # both activate the focused button
         return f"submit ({combo} key)"
     if key in ("delete", "backspace", "forwarddelete") and any(m[1] == MODS["cmd"][1] for m in mods):
         return f"delete ({combo} shortcut)"
@@ -419,12 +423,20 @@ class MacIO:
         opts = Q.kCGWindowListOptionOnScreenOnly | Q.kCGWindowListExcludeDesktopElements
         for w in Q.CGWindowListCopyWindowInfo(opts, Q.kCGNullWindowID) or []:
             b = w.get("kCGWindowBounds") or {}
-            out.append({"id": int(w.get("kCGWindowNumber", 0)), "pid": int(w.get("kCGWindowOwnerPID", 0)),
+            pid = int(w.get("kCGWindowOwnerPID", 0))
+            out.append({"id": int(w.get("kCGWindowNumber", 0)), "pid": pid, "bundle": self.bundle_of(pid),
                         "owner": str(w.get("kCGWindowOwnerName") or ""), "title": str(w.get("kCGWindowName") or ""),
                         "layer": int(w.get("kCGWindowLayer", 0)), "alpha": float(w.get("kCGWindowAlpha", 1)),
                         "x": float(b.get("X", 0)), "y": float(b.get("Y", 0)),
                         "w": float(b.get("Width", 0)), "h": float(b.get("Height", 0))})
         return out
+
+    def bundle_of(self, pid: int) -> str:
+        cache = self.__dict__.setdefault("_bundles", {})
+        if pid not in cache:
+            app = self.A.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            cache[pid] = str(app.bundleIdentifier() or "") if app is not None else ""
+        return cache[pid]
 
     def capture(self, win: dict[str, Any], path: Path) -> float:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -672,7 +684,7 @@ class Engine:
         win = pick_main(wins, self.app)
         if win is None:
             raise Stop(f"no {self.app} window on screen. Open it (open_app step) or bring it back, then rerun.")
-        if denied_app(win["owner"]):
+        if denied_app(win["owner"]) or denied_app(win.get("bundle")):
             raise Stop(f"refused: {win['owner']} is on the kit's never-drive list", needs_human=True)
         alerts = alert_windows(wins, win, self.app)
         if self.known_dialogs is None:  # system dialogs already up, clear of the window: noted, not fatal
@@ -784,7 +796,7 @@ class Engine:
         raise Stop(f"the point to click is covered by {who}, not {self.app}'s window; no click sent")
 
     def guard(self, label: str, step: dict[str, Any], picked: bool = False) -> None:
-        note = common.guard_click(label, step, self.args.approved, picked=picked)
+        note = common.guard_click(label, step, self.args.approved, picked=picked, recipe=self.log.data.get("recipe"))
         if note:
             self.extra.setdefault("guard", []).append(note)
             if note.startswith("approved:"):
@@ -902,6 +914,8 @@ class Engine:
             label = submit_label(str(combo))
             if label:
                 self.guard(label, step)
+        if any(len(str(c)) == 1 or re.fullmatch(r"(?:shift\+)?.", str(c), re.I) for c in combos):
+            self.refuse_secret(self.observe(), None)  # typed characters: same rule as `type`
         if self.win is None:
             self.observe()
         self._begin_input()
@@ -1148,7 +1162,10 @@ def execute(recipe: dict[str, Any], args: argparse.Namespace, io: Any = None,
             try:
                 if common.run_code_step(step, log, budget):
                     continue
-                eng.do(step)
+                try:
+                    eng.do(step)
+                except (KeyError, TypeError, ValueError) as bad:
+                    raise Stop(f"step '{current}' is malformed: {type(bad).__name__} {common.clip(str(bad), 120)}") from None
                 log.step(current, ms=(time.monotonic() - started) * 1000, **eng.extra)
             except Stop as exc:
                 if step.get("optional") and not exc.needs_human:
@@ -1322,8 +1339,8 @@ def main(argv: list[str] | None = None) -> int:
         common.emit({"status": "error", "error": str(exc)})
         return 1
     except Stop as exc:
-        common.emit({"status": "needs_human" if exc.needs_human else "error", "error": exc.reason})
-        return 2 if exc.needs_human else 1
+        common.emit({"status": "needs_human" if exc.needs_human else "stopped", "reason": exc.reason})
+        return 2
 
 
 if __name__ == "__main__":

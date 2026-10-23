@@ -153,13 +153,45 @@ class WebEngineTest(unittest.TestCase):
         self.assertEqual(blocked["status"], "needs_human")
         self.assertIn("approve", blocked["stopped"]["reason"])
         self.assertIn("Not ordered yet", blocked["stopped"]["screen_text"])
-        common.approve("test-order-1", "yes, place the fixture order")
+        common.approve("test-order-wrong", "yes, but for another recipe", "other-recipe")
+        wrong = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-wrong")
+        self.assertEqual(wrong["status"], "needs_human", "an approval only covers its own recipe")
+        common.approve("test-order-1", "yes, place the fixture order", "order")
         allowed = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-1")
         self.assertEqual(allowed["status"], "done", allowed.get("stopped"))
         self.assertTrue(allowed["steps"][-1]["guard"].startswith("approved"))
         self.assertFalse(common.approval_valid("test-order-1"), "the approval is used up by the run")
         again = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-1")
         self.assertEqual(again["status"], "needs_human")
+
+    def test_enter_and_space_on_a_buy_button_are_guarded(self) -> None:
+        for key in ("Enter", "Space"):
+            result = self.run_recipe(self.recipe("press", [
+                self.go("risky.html"), {"id": "press-buy", "do": "press", "key": key,
+                                        "target": {"role": "button", "name": "Buy now"}}]))
+            self.assertEqual(result["status"], "needs_human", key)
+            self.assertIn("Nothing yet", result["stopped"]["screen_text"], key)
+
+    def test_pick_is_guarded_on_the_element_not_the_attribute(self) -> None:
+        result = self.run_recipe(self.recipe("pick-attr", [
+            self.go("risky.html"), {"id": "pick-act", "do": "pick", "from": {"css": "a.act"}, "attr": "data-id",
+                                    "instructions": "Which one?"}]), FakeJev(word="k1"))
+        self.assertEqual(result["status"], "needs_human", result.get("stopped"))
+        self.assertIn("Nothing yet", result["stopped"]["screen_text"])
+
+    def test_keystrokes_into_a_secret_field_refused(self) -> None:
+        result = self.run_recipe(self.recipe("pin", [
+            self.go("risky.html"), {"id": "pin-key", "do": "press", "key": "1", "target": {"label": "PIN"}}]))
+        self.assertEqual(result["status"], "needs_human")
+
+    def test_redirect_off_site_is_caught_before_input(self) -> None:
+        result = self.run_recipe(self.recipe("redirect", [
+            self.go("redirect.html"), {"id": "pause", "do": "wait", "secs": 0.8},
+            {"id": "type", "do": "fill", "target": {"css": "input"}, "text": "hello"}]))
+        self.assertEqual(result["status"], "stopped")
+        self.assertIn("left the allowed sites", result["stopped"]["reason"])
+        self.assertEqual(result["stopped"]["step"], "type")
+        self.assertNotIn("chars", json.dumps(result["steps"]))
 
     def test_sensitive_fields_refused(self) -> None:
         for label in ("Password", "Card"):

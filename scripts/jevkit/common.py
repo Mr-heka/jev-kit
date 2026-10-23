@@ -42,10 +42,17 @@ PUBLISH_WORDS = re.compile(
     r"sign up|create account|boost|install|upgrade|accept|agree)\b",
     re.I,
 )
+# Money and deletion: no recipe note can wave these through, only an approval.
+HIGH_RISK_WORDS = re.compile(
+    r"\b(buy|pay|purchase|checkout|check out|place (?:your )?order|order now|book now|reserve|donate|"
+    r"transfer|send money|delete|remove account|close account|subscribe|upgrade)\b",
+    re.I,
+)
 # Screens a machine must never get past on its own.
 HUMAN_GATES = re.compile(
     r"captcha|verify you are (?:a )?human|i'?m not a robot|are you a robot|unusual traffic|"
-    r"security check|two-factor|2-step verification|verification code|one-time (?:pass)?code",
+    r"security check|two-factor|2-step verification|verification code|one-time (?:pass)?code|"
+    r"enter the (?:\d-digit )?code|code (?:we )?sent|we sent (?:you )?a code|confirm it'?s you",
     re.I,
 )
 
@@ -268,23 +275,28 @@ def _ledger() -> dict[str, Any]:
         return {}
 
 
-def approve(approval_id: str, quote: str) -> dict[str, Any]:
-    """Record the user's own words approving one publishing run."""
+def approve(approval_id: str, quote: str, recipe: str) -> dict[str, Any]:
+    """Record the user's own words approving one publishing run of one recipe."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,80}", approval_id):
         raise Stop("approval ids are 3-80 letters, digits, dots, dashes or underscores")
     if not quote.strip():
         raise Stop("an approval needs the user's own words in --quote")
     ledger = _ledger()
-    ledger[approval_id] = {"quote": quote.strip(), "at": now_iso(), "epoch": time.time(), "used": False}
+    if not recipe.strip():
+        raise Stop("an approval names the recipe it covers (--recipe NAME, or 'step' for one-off steps)")
+    ledger[approval_id] = {"quote": quote.strip(), "recipe": recipe.strip(), "at": now_iso(),
+                           "epoch": time.time(), "used": False}
     _write_json(APPROVALS, ledger, private=True)
     return {"id": approval_id, **ledger[approval_id]}
 
 
-def approval_valid(approval_id: str | None) -> bool:
+def approval_valid(approval_id: str | None, recipe: str | None = None) -> bool:
     if not approval_id:
         return False
     entry = _ledger().get(approval_id)
-    return bool(entry) and not entry.get("used") and time.time() - entry.get("epoch", 0) < APPROVAL_HOURS * 3600
+    if not entry or entry.get("used") or time.time() - entry.get("epoch", 0) >= APPROVAL_HOURS * 3600:
+        return False
+    return recipe is None or entry.get("recipe") == recipe
 
 
 def consume_approval(approval_id: str) -> None:
@@ -295,24 +307,35 @@ def consume_approval(approval_id: str) -> None:
         _write_json(APPROVALS, ledger, private=True)
 
 
-def guard_click(label: str, step: dict[str, Any], approval_id: str | None, picked: bool = False) -> str | None:
+def _mapped_label(step: dict[str, Any]) -> str:
+    target = step.get("target") or {}
+    return str(target.get("name") or target.get("text") or target.get("label") or "").strip().lower()
+
+
+def guard_click(label: str, step: dict[str, Any], approval_id: str | None, picked: bool = False,
+                recipe: str | None = None) -> str | None:
     """Raise Stop before a click that sends, buys, posts or deletes without approval.
 
     Returns a note for the run log when the click is allowed for a stated reason.
     A recipe can mark a fixed, mapped button `safe_because` (a search box's
-    'Submit'); targets chosen at run time by Jev never get that pass.
+    'Submit'). The pass holds only while the button still carries the text it was
+    mapped with, never for money or deletion words, and never for targets chosen
+    at run time by Jev.
     """
     flagged = bool(step.get("publish")) or bool(PUBLISH_WORDS.search(label or ""))
     if not flagged:
         return None
-    if not step.get("publish") and step.get("safe_because") and not picked:
-        return f"allowed: {step['safe_because']}"
-    if approval_valid(approval_id):
+    if step.get("safe_because") and not step.get("publish") and not picked:
+        mapped = _mapped_label(step)
+        seen = [part.strip().lower() for part in (label or "").split("|") if part.strip()]
+        if mapped and seen and all(part == mapped for part in seen) and not HIGH_RISK_WORDS.search(label or ""):
+            return f"allowed: {step['safe_because']}"
+    if approval_valid(approval_id, recipe):
         return f"approved: {approval_id}"
     raise Stop(
         f"'{clip(label, 80)}' looks like it sends, buys, books, posts or deletes. "
         "Show the user exactly what will happen, record their yes with "
-        "`jev.py approve <id> --quote \"<their words>\"`, then rerun with --approved <id>.",
+        "`jev.py approve <id> --recipe <recipe> --quote \"<their words>\"`, then rerun with --approved <id>.",
         needs_human=True,
     )
 
@@ -327,14 +350,18 @@ def expect_text(expect: dict[str, Any] | None, text: str) -> tuple[bool, str]:
     """Plain text checks, case-insensitive substrings. Free, no Jev."""
     if not expect:
         return True, ""
+    def as_list(key: str) -> list[str]:  # a lone string is one phrase, not a list of letters
+        value = expect.get(key, [])
+        return [value] if isinstance(value, str) else [str(v) for v in value]
+
     low = (text or "").lower()
-    missing = [t for t in expect.get("all", []) if t.lower() not in low]
+    missing = [t for t in as_list("all") if t.lower() not in low]
     if missing:
         return False, "missing: " + ", ".join(missing)
-    anys = expect.get("any", [])
+    anys = as_list("any")
     if anys and not any(t.lower() in low for t in anys):
         return False, "none of: " + ", ".join(anys)
-    present = [t for t in expect.get("none", []) if t.lower() in low]
+    present = [t for t in as_list("none") if t.lower() in low]
     if present:
         return False, "should not show: " + ", ".join(present)
     return True, ""
@@ -347,7 +374,7 @@ class RunLog:
 
     def __init__(self, recipe: dict[str, Any], engine: str):
         self.stamp = time.strftime("%Y%m%d-%H%M%S")
-        self.dir = RUNS / recipe["name"]
+        self.dir = RUNS / (re.sub(r"[^A-Za-z0-9._-]+", "-", str(recipe["name"])).strip(".-") or "recipe")
         self.path = self.dir / f"{self.stamp}.json"
         self.t0 = time.monotonic()
         self.data: dict[str, Any] = {

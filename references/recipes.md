@@ -102,7 +102,13 @@ The result has `status` (`stopped` or `needs_human`), `stopped.step`,
 
 ## Approvals
 
-`jev.py approve <id> --quote "<the user's own words>"` records a yes for one
-publishing run, valid for 48 hours and used up by that run. Rerun with
-`--approved <id>`. Without it, the engines stop at any button that sends, buys,
-books, posts or deletes, whatever the recipe says.
+`jev.py approve <id> --recipe <name> --quote "<the user's own words>"` records a
+yes for one publishing run of that recipe, valid for 48 hours and used up by the
+first guarded click it allows. Use `--recipe step` for one-off `step` commands.
+Rerun with `--approved <id>`. Without it, the engines stop at any button that
+sends, buys, books, posts or deletes, whatever the recipe says.
+
+The guard reads the text of what is clicked or pressed (Enter and Space included).
+A button that commits under a neutral name ("Continue", an arrow icon) needs
+`"publish": true` on its step. `safe_because` only covers the exact button text it
+was mapped with, and never money or deletion words.

@@ -59,7 +59,8 @@ SENSITIVE = re.compile(
     r"verification ?code|security ?code|card ?(?:number|no\b|num)|cc ?(?:num|no\b)|credit ?card|debit ?card|"
     r"cvv|cvc|csc\b|ccv|card ?verification|expiry|expiration|exp ?(?:date|month|year|mm|yy)|iban|bsb\b|"
     r"routing ?number|sort ?code|swift|bank|account ?(?:number|no\b|num)|acct\b|tax ?file|tfn\b|ssn\b|"
-    r"social ?security)", re.I)
+    r"social ?security|(?:sms|auth|access|login|sign ?in|6 ?digit|one ?time) ?code|otc\b|"
+    r"api ?key|access ?token|auth ?token|secret ?key|private ?key|recovery ?(?:code|phrase)|seed ?phrase)", re.I)
 SENSITIVE_AUTOCOMPLETE = re.compile(r"(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)", re.I)
 
 JS_HELPERS = r"""
@@ -442,12 +443,15 @@ class Runner:
             return ""
 
     def fence(self) -> None:
-        url = self.page.url
+        try:  # ask the page itself: page.url is only refreshed when Playwright pumps events
+            url = self.page.evaluate("() => location.href") or self.page.url
+        except Exception:
+            url = self.page.url
         if not domain_allowed(url, self.allow):
             raise Stop(f"left the allowed sites: now on {host_of(url)}, allowed {', '.join(self.allow)}")
 
     def guard(self, label: str, step: dict[str, Any], picked: bool = False) -> str | None:
-        note = common.guard_click(label, step, self.approved, picked=picked)
+        note = common.guard_click(label, step, self.approved, picked=picked, recipe=self.log.data.get("recipe"))
         if note and note.startswith("approved"):
             self.used_approval = True
         return note
@@ -466,6 +470,8 @@ class Runner:
             if not self._present(step["target"], step.get("nth"), timeout):
                 self.log.step(step["id"], ms=(time.monotonic() - started) * 1000, skipped="target not on the page")
                 return
+        if do != "goto":
+            self.fence()  # a redirect since the last step must not receive input
         before = len(self.br.context.pages)
         getattr(self, "do_" + do)(step, timeout, extra)
         if len(self.br.context.pages) > before:  # the click opened a tab: follow it
@@ -578,11 +584,21 @@ class Runner:
     def do_press(self, step: dict[str, Any], timeout: float, extra: dict[str, Any]) -> None:
         key = str(step["key"])
         loc = self.resolve(step, timeout) if step.get("target") else None
-        if key.split("+")[-1].lower() in {"enter", "numpadenter"}:  # Enter can submit a form: guard its buttons
-            submits = loc.evaluate(FORM_SUBMITS_JS) if loc else self.page.evaluate(FORM_SUBMITS_JS, None)
-            note = self.guard(submits or "", step)
+        focus = loc or self.page.locator(":focus").first
+        has_focus = loc is not None or focus.count() > 0
+        last = key.split("+")[-1].lower()
+        if last in {"enter", "numpadenter", "space", " "}:
+            # Enter or Space activates the focused button or link and can submit its form:
+            # guard on the element's own name plus the form's submit buttons.
+            own = self._label(focus, step.get("target") or {}) if has_focus else ""
+            submits = focus.evaluate(FORM_SUBMITS_JS) if has_focus else self.page.evaluate(FORM_SUBMITS_JS, None)
+            note = self.guard(" | ".join(x for x in (own, submits) if x), step)
             if note:
                 extra["guard"] = note
+        elif len(last) == 1 and has_focus:  # a typed character: same rule as fill
+            why = sensitive_field(focus.evaluate(FIELD_INFO_JS))
+            if why:
+                raise Stop(f"step '{step['id']}': the kit never types here ({why}).", needs_human=True)
         if loc:
             loc.press(key, timeout=timeout * 1000)
         else:
@@ -710,7 +726,7 @@ class Runner:
         href = (loc.evaluate_all(HREFS_JS) or [None] * len(texts))[index]
         self.log.save(step.get("save_as", step["id"]), {"index": index, "text": texts[index], "href": href})
         if step.get("then", "click") == "click":
-            note = self.guard(texts[index], step, picked=True)
+            note = self.guard(self._label(chosen, {}) or texts[index], step, picked=True)
             if note:
                 extra["guard"] = note
             chosen.click(timeout=timeout * 1000)
@@ -760,7 +776,10 @@ def run_recipe(recipe: dict[str, Any], br: Browser, budget: common.Budget, appro
     """Replay a loaded recipe on `br`. Returns the run log (status done, stopped or needs_human)."""
     log = common.RunLog(recipe, "web")
     start = recipe.get("start_url")
-    allow = recipe.get("allow_domains") or ([host_of(start)] if start else [])
+    first_goto = next((s.get("url") for s in recipe["steps"] if s.get("do") == "goto" and s.get("url")), None)
+    allow = recipe.get("allow_domains") or [host_of(u) for u in (start, first_goto) if u and host_of(u)][:1]
+    if not allow:  # nothing names a site: local pages (data:, file:) only, any http(s) page stops the run
+        allow = ["no-site-allowed.invalid"]
     runner = Runner(br, log, budget, approved, allow, timeout)
     current = "start"
     try:

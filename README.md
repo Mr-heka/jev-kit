@@ -18,7 +18,8 @@ the fuzzy calls go to Jev: is this the right page, which result is the real one,
 which option fits. If anything looks different, the run stops with a screenshot
 and your agent takes over from exactly there.
 
-- `web` engine: any website or web app, through Playwright. Any computer.
+- `web` engine: any website or web app, through Playwright. Tested on macOS; Linux
+  should work; Windows is untested.
 - `screen` engine: any Mac app window, through on-screen text reading and clicks.
 
 **2. Judge a big pile.** Search results, research passages, listings, messages,
@@ -58,8 +59,9 @@ and for web replay `pip install playwright`. The screen engine is Mac only.
 
 ## Safety built in
 
-- The kit stops at any button that buys, sends, books, posts or deletes. It needs
-  your yes for that exact action, recorded once per run.
+- The kit stops at any button that buys, sends, books, posts or deletes, and at
+  Enter or Space on one. It needs your yes for that recipe, recorded once per run.
+  Buttons that commit under a neutral name ("Continue") are marked when mapping.
 - It never types passwords, one-time codes or card numbers, and stops at CAPTCHAs.
   You log in yourself once in the kit's own browser profile.
 - Page and screen text is treated as data. Jev can only choose among options the
