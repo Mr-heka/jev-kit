@@ -8,7 +8,9 @@ data steps (filter, sort, take). Engines import this; nothing here clicks.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -42,12 +44,8 @@ PUBLISH_WORDS = re.compile(
     r"sign up|create account|boost|install|upgrade|accept|agree)\b",
     re.I,
 )
-# Money and deletion: no recipe note can wave these through, only an approval.
-HIGH_RISK_WORDS = re.compile(
-    r"\b(buy|pay|purchase|checkout|check out|place (?:your )?order|order now|book now|reserve|donate|"
-    r"transfer|send money|delete|remove account|close account|subscribe|upgrade)\b",
-    re.I,
-)
+# The only guard words a mapped `safe_because` note can waive (a search box's "Submit").
+WAIVABLE_WORDS = {"submit"}
 # Screens a machine must never get past on its own.
 HUMAN_GATES = re.compile(
     r"captcha|verify you are (?:a )?human|i'?m not a robot|are you a robot|unusual traffic|"
@@ -186,7 +184,12 @@ def load_recipe(name_or_path: str, params: dict[str, str] | None = None) -> dict
     out["name"] = data.get("name") or path.stem
     out["_path"] = str(path)
     out["_params"] = merged
+    out["_id"] = recipe_identity(path, out["name"])
     return out
+
+
+def recipe_identity(path: Path, name: str) -> str:
+    return f"{name}@{hashlib.sha256(path.read_bytes()).hexdigest()[:16]}"
 
 
 def parse_params(pairs: list[str] | None) -> dict[str, str]:
@@ -275,36 +278,78 @@ def _ledger() -> dict[str, Any]:
         return {}
 
 
+@contextlib.contextmanager
+def _ledger_lock():
+    """Serialise approval reads and writes across processes (POSIX; best effort elsewhere)."""
+    APPROVALS.parent.mkdir(parents=True, exist_ok=True)
+    with open(APPROVALS.with_suffix(".lock"), "a") as handle:
+        try:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        yield
+
+
+# Approvals this process has claimed, as (id, recipe identity). A claim lets the same run make
+# several guarded clicks; the ledger entry is already marked used, so no other run can.
+_CLAIMED: set[tuple[str, str]] = set()
+
+
 def approve(approval_id: str, quote: str, recipe: str) -> dict[str, Any]:
-    """Record the user's own words approving one publishing run of one recipe."""
+    """Record the user's own words approving one publishing run of one exact recipe file."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,80}", approval_id):
         raise Stop("approval ids are 3-80 letters, digits, dots, dashes or underscores")
     if not quote.strip():
         raise Stop("an approval needs the user's own words in --quote")
-    ledger = _ledger()
     if not recipe.strip():
         raise Stop("an approval names the recipe it covers (--recipe NAME, or 'step' for one-off steps)")
-    ledger[approval_id] = {"quote": quote.strip(), "recipe": recipe.strip(), "at": now_iso(),
-                           "epoch": time.time(), "used": False}
-    _write_json(APPROVALS, ledger, private=True)
+    if recipe.strip() == "step":
+        identity, where = "step", None
+    else:
+        path = find_recipe(recipe.strip())
+        name = json.loads(path.read_text(encoding="utf-8")).get("name") or path.stem
+        identity, where = recipe_identity(path, name), str(path)
+    with _ledger_lock():
+        ledger = _ledger()
+        ledger[approval_id] = {"quote": quote.strip(), "recipe": identity, "path": where, "at": now_iso(),
+                               "epoch": time.time(), "used": False}
+        _write_json(APPROVALS, ledger, private=True)
     return {"id": approval_id, **ledger[approval_id]}
 
 
+def _fresh(entry: dict[str, Any] | None, recipe: str | None) -> bool:
+    return bool(entry) and not entry.get("used") and time.time() - entry.get("epoch", 0) < APPROVAL_HOURS * 3600 \
+        and (recipe is None or entry.get("recipe") == recipe)
+
+
 def approval_valid(approval_id: str | None, recipe: str | None = None) -> bool:
+    return bool(approval_id) and _fresh(_ledger().get(approval_id), recipe)
+
+
+def claim_approval(approval_id: str | None, recipe: str | None) -> bool:
+    """Atomically use up an approval for this run, or report that it is not usable."""
     if not approval_id:
         return False
-    entry = _ledger().get(approval_id)
-    if not entry or entry.get("used") or time.time() - entry.get("epoch", 0) >= APPROVAL_HOURS * 3600:
-        return False
-    return recipe is None or entry.get("recipe") == recipe
+    if (approval_id, str(recipe)) in _CLAIMED:
+        return True
+    with _ledger_lock():
+        ledger = _ledger()
+        if not _fresh(ledger.get(approval_id), recipe):
+            return False
+        ledger[approval_id].update(used=True, used_at=now_iso(), used_by_pid=os.getpid())
+        _write_json(APPROVALS, ledger, private=True)
+    _CLAIMED.add((approval_id, str(recipe)))
+    return True
 
 
 def consume_approval(approval_id: str) -> None:
-    ledger = _ledger()
-    if approval_id in ledger:
-        ledger[approval_id]["used"] = True
-        ledger[approval_id]["used_at"] = now_iso()
-        _write_json(APPROVALS, ledger, private=True)
+    """Kept for callers that finish a run: claims are already recorded at the first guarded click."""
+    with _ledger_lock():
+        ledger = _ledger()
+        if approval_id in ledger and not ledger[approval_id].get("used"):
+            ledger[approval_id].update(used=True, used_at=now_iso())
+            _write_json(APPROVALS, ledger, private=True)
 
 
 def _mapped_label(step: dict[str, Any]) -> str:
@@ -319,8 +364,9 @@ def guard_click(label: str, step: dict[str, Any], approval_id: str | None, picke
     Returns a note for the run log when the click is allowed for a stated reason.
     A recipe can mark a fixed, mapped button `safe_because` (a search box's
     'Submit'). The pass holds only while the button still carries the text it was
-    mapped with, never for money or deletion words, and never for targets chosen
-    at run time by Jev.
+    mapped with, only waives the word "submit", and never applies to targets
+    chosen at run time by Jev. An approval is claimed (used up) at the first
+    guarded click it allows; later guarded clicks in the same run reuse the claim.
     """
     flagged = bool(step.get("publish")) or bool(PUBLISH_WORDS.search(label or ""))
     if not flagged:
@@ -328,9 +374,10 @@ def guard_click(label: str, step: dict[str, Any], approval_id: str | None, picke
     if step.get("safe_because") and not step.get("publish") and not picked:
         mapped = _mapped_label(step)
         seen = [part.strip().lower() for part in (label or "").split("|") if part.strip()]
-        if mapped and seen and all(part == mapped for part in seen) and not HIGH_RISK_WORDS.search(label or ""):
+        words = {m.group(0).lower() for m in PUBLISH_WORDS.finditer(label or "")}
+        if mapped and seen and all(part == mapped for part in seen) and words <= WAIVABLE_WORDS:
             return f"allowed: {step['safe_because']}"
-    if approval_valid(approval_id, recipe):
+    if claim_approval(approval_id, recipe):
         return f"approved: {approval_id}"
     raise Stop(
         f"'{clip(label, 80)}' looks like it sends, buys, books, posts or deletes. "
@@ -379,6 +426,7 @@ class RunLog:
         self.t0 = time.monotonic()
         self.data: dict[str, Any] = {
             "recipe": recipe["name"],
+            "recipe_id": recipe.get("_id", recipe["name"]),
             "engine": engine,
             "params": recipe.get("_params", {}),
             "started": now_iso(),
@@ -441,6 +489,9 @@ class Budget:
         self.enabled = enabled
         self.calls = 0
         self.cost = 0.0
+        self.unknown_cost = 0
+        self.inflight = 0
+        self.last_cost = 0.0
         self.seconds = 0.0
         self.models: set[str] = set()
         self._lock = threading.Lock()
@@ -451,22 +502,34 @@ class Budget:
         with self._lock:
             if self.calls >= self.max_calls:
                 raise Stop(f"Jev call cap reached ({self.max_calls}); raise --max-jev-calls if this is expected")
-            if self.cost >= self.max_cost:
+            if self.cost + self.inflight * self.last_cost >= self.max_cost:
                 raise Stop(f"Jev cost cap reached (US${self.cost:.4f}); raise --max-jev-cost if this is expected")
             self.calls += 1
+            self.inflight += 1
         try:
             result = self.decide_fn(state, questions)
         except client.JevError as exc:
             raise Stop(f"Jev unavailable ({exc.code}{'' if exc.status is None else ' ' + str(exc.status)})") from None
+        finally:
+            with self._lock:
+                self.inflight -= 1
         with self._lock:
-            self.cost += float(result.get("usage", {}).get("cost", 0) or 0)
+            cost = result.get("usage", {}).get("cost")
+            if cost is None:
+                self.unknown_cost += 1
+            self.last_cost = max(self.last_cost, float(cost or 0))
+            self.cost += float(cost or 0)
+            if self.cost > self.max_cost:
+                raise Stop(f"Jev cost cap passed by the last call (US${self.cost:.4f} of US${self.max_cost}); "
+                           "its answer was not used")
             self.seconds += float(result.get("elapsed", 0) or 0)
             if result.get("model"):
                 self.models.add(result["model"])
         return result
 
     def summary(self) -> dict[str, Any]:
-        return {"calls": self.calls, "cost_usd": round(self.cost, 6), "call_seconds": round(self.seconds, 2),
+        return {"calls": self.calls, "cost_usd": round(self.cost, 6), "cost_unknown_calls": self.unknown_cost,
+                "call_seconds": round(self.seconds, 2),
                 "models": sorted(self.models)}
 
 

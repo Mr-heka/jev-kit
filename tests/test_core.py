@@ -76,6 +76,12 @@ class ClientValidation(unittest.TestCase):
         with self.assertRaises(client.JevError):
             client._check_answers({"a": {**ok["a"], "choice": "zzz"}}, q)
 
+    def test_key_with_line_break_refused_quietly(self):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-abc\nInjected: 1", "JEV_KEY_COMMAND": ""}):
+            with self.assertRaises(client.JevError) as ctx:
+                client._lookup_key()
+            self.assertNotIn("sk-abc", str(ctx.exception.as_dict()))
+
     def test_key_command(self):
         with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "", "JEV_KEY_COMMAND": "echo sk-test"}):
             self.assertEqual(client._lookup_key(), "sk-test")
@@ -136,6 +142,11 @@ class Guard(TempHome):
         self.assertIsNone(common.guard_click("Travel", {"id": "x"}, None))
         self.assertIsNone(common.guard_click("The Book of Days", {"id": "x"}, None))
 
+    def test_safe_because_never_waives_remove_or_booking(self):
+        for name in ("Remove", "Book flight", "Send"):
+            with self.assertRaises(Stop, msg=name):
+                common.guard_click(name, {"id": "x", "safe_because": "x", "target": {"name": name}}, None)
+
     def test_safe_because_only_for_fixed_targets(self):
         step = {"id": "x", "safe_because": "search box button", "target": {"name": "Submit"}}
         self.assertIn("allowed", common.guard_click("Submit", step, None))
@@ -148,18 +159,35 @@ class Guard(TempHome):
         with self.assertRaises(Stop):  # money words never get the pass
             common.guard_click("Pay", {"id": "x", "safe_because": "x", "target": {"name": "Pay"}}, None)
 
+    def _recipe(self, name, about):
+        common.RECIPES.mkdir(parents=True, exist_ok=True)
+        path = common.RECIPES / f"{name}.json"
+        path.write_text(json.dumps({"name": "demo", "engine": "web", "about": about, "read_only": False,
+                                    "steps": [{"do": "click", "publish": True}]}))
+        return path
+
     def test_approval_is_single_use(self):
+        self._recipe("demo", "real")
         with self.assertRaises(Stop):
             common.approve("a", "yes", "demo")
         with self.assertRaises(Stop):
             common.approve("post-1", "yes", " ")
         common.approve("post-1", "Yes, post it at 6pm", "demo")
+        demo_id = common.load_recipe("demo")["_id"]
         with self.assertRaises(Stop):  # bound to its recipe
             common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe="other")
-        self.assertIn("approved", common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe="demo"))
-        common.consume_approval("post-1")
-        with self.assertRaises(Stop):
-            common.guard_click("Post", {"id": "x", "publish": True}, "post-1")
+        self.assertIn("approved", common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe=demo_id))
+        common._CLAIMED.clear()  # a second process
+        with self.assertRaises(Stop):  # already claimed by the first run, even before it finished
+            common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe=demo_id)
+
+    def test_approval_bound_to_exact_recipe_file(self):
+        self._recipe("demo", "real")
+        common.approve("ok-1", "yes", "demo")
+        real_id = common.load_recipe("demo")["_id"]
+        self._recipe("demo", "edited after the yes")  # same name, different contents
+        self.assertNotEqual(common.load_recipe("demo")["_id"], real_id)
+        self.assertFalse(common.claim_approval("ok-1", common.load_recipe("demo")["_id"]))
 
     def test_human_gates(self):
         for text in ("Please verify you are human", "Enter the code we sent to your phone", "Enter the 6-digit code"):
@@ -197,6 +225,12 @@ class JevMoves(TempHome):
         budget = common.Budget(decide_fn=fake_decide(answers))
         self.assertEqual(common.jev_pick(budget, "which?", ["x", "y", "z"], threshold=0.5)[0], 1)
         self.assertIsNone(common.jev_pick(budget, "which?", ["x", "y", "z"], threshold=0.6)[0])
+
+    def test_cost_cap_checked_after_the_call(self):
+        def pricey(state, questions):
+            return {"model": "m", "answers": {"c": {"type": "noul", "noul": 0.9}}, "usage": {"cost": 0.5}, "elapsed": 0}
+        with self.assertRaises(Stop):
+            common.Budget(max_cost=0.1, decide_fn=pricey).decide({}, {"c": {"type": "noul", "instructions": "x"}})
 
     def test_budget_caps(self):
         budget = common.Budget(max_calls=1, decide_fn=fake_decide(lambda s, q: {"c": {"type": "noul", "noul": 0.9}}))

@@ -47,7 +47,7 @@ screenshots go to `~/.jev-kit/runs/<recipe>/` (or `JEV_KIT_RUNS`).
 | `judge` | A Jev check after `expect` passes, for what text cannot tell (below) |
 | `optional` | Skip quietly when the target is not there (a cookie banner's "Reject all") |
 | `publish` | This click sends, buys, books, posts or deletes. Needs `--approved` |
-| `safe_because` | A fixed, mapped button that only looks risky ("Submit" on a search box). Write the reason. Never allowed on Jev-picked targets |
+| `safe_because` | A fixed, mapped "Submit" button that only looks risky (a search box). Write the reason. Waives nothing else. Never allowed on Jev-picked targets |
 | `timeout` | Seconds to wait for the target or the expected screen |
 
 ## Jev steps
@@ -103,12 +103,15 @@ The result has `status` (`stopped` or `needs_human`), `stopped.step`,
 ## Approvals
 
 `jev.py approve <id> --recipe <name> --quote "<the user's own words>"` records a
-yes for one publishing run of that recipe, valid for 48 hours and used up by the
-first guarded click it allows. Use `--recipe step` for one-off `step` commands.
-Rerun with `--approved <id>`. Without it, the engines stop at any button that
-sends, buys, books, posts or deletes, whatever the recipe says.
+yes for one publishing run of that exact recipe file: editing the recipe after the
+yes voids it. It is valid for 48 hours and is claimed (used up) at the first
+guarded click it allows, so a second run cannot use it even if both start at once.
+Use `--recipe step` for one-off `step` commands. Rerun with `--approved <id>`.
+Without it, the engines stop at any button that sends, buys, books, posts or
+deletes, whatever the recipe says.
 
-The guard reads the text of what is clicked or pressed (Enter and Space included).
-A button that commits under a neutral name ("Continue", an arrow icon) needs
-`"publish": true` on its step. `safe_because` only covers the exact button text it
-was mapped with, and never money or deletion words.
+The guard reads the text of what is clicked or pressed: Enter, Space and Delete
+(outside a text field) included, and dropdown choices. A button that commits under
+a neutral name ("Continue", an arrow icon) needs `"publish": true` on its step;
+that guards any click, key or select. `safe_because` only covers the exact button
+text it was mapped with, and only ever waives the word "Submit".

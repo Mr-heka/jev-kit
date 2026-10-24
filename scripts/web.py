@@ -116,6 +116,12 @@ NAMES_JS = "(els) => {" + JS_HELPERS + " return els.map(e => accName(e) || _t(e.
 ATTRS_JS = "(els, a) => els.map(e => (a === 'href' || a === 'src') && e[a] ? e[a] : (e.getAttribute(a) || ''))"
 HREFS_JS = "(els) => els.map(e => e.href || (e.closest('a') ? e.closest('a').href : null) || (e.querySelector && e.querySelector('a[href]') ? e.querySelector('a[href]').href : null))"
 VALUE_JS = "(e, a) => (a === 'href' || a === 'src') && e[a] ? e[a] : (a ? e.getAttribute(a) : (e.innerText || e.textContent || '').replace(/\\s+/g, ' ').trim())"
+# Keys that never type a character into a field. Anything else typed through `press`
+# (Digit1, KeyA, Shift+A, Meta+V...) gets the same secret-field check as `fill`.
+NON_TYPING_KEYS = {"enter", "numpadenter", "tab", "escape", "esc", "arrowup", "arrowdown", "arrowleft", "arrowright",
+                   "home", "end", "pageup", "pagedown", "delete", "backspace", "shift", "control", "alt", "meta",
+                   "capslock", "insert", "contextmenu", *(f"f{n}" for n in range(1, 13))}
+EDITABLE_JS = "(e) => !!e && (e.isContentEditable || ['input', 'textarea', 'select'].includes(e.tagName.toLowerCase()))"
 FIELD_INFO_JS = """(e) => ({tag: e.tagName.toLowerCase(), type: (e.getAttribute('type') || '').toLowerCase(),
   autocomplete: e.getAttribute('autocomplete') || '', name: e.getAttribute('name') || '', id: e.id || '',
   aria: e.getAttribute('aria-label') || '', placeholder: e.getAttribute('placeholder') || '',
@@ -450,8 +456,14 @@ class Runner:
         if not domain_allowed(url, self.allow):
             raise Stop(f"left the allowed sites: now on {host_of(url)}, allowed {', '.join(self.allow)}")
 
+    def preflight(self) -> None:
+        """Right before any input: still on an allowed site, and no human check on screen."""
+        self.fence()
+        common.check_human_gate(self.page_text())
+
     def guard(self, label: str, step: dict[str, Any], picked: bool = False) -> str | None:
-        note = common.guard_click(label, step, self.approved, picked=picked, recipe=self.log.data.get("recipe"))
+        recipe = self.log.data.get("recipe_id") or self.log.data.get("recipe")
+        note = common.guard_click(label, step, self.approved, picked=picked, recipe=recipe)
         if note and note.startswith("approved"):
             self.used_approval = True
         return note
@@ -471,7 +483,7 @@ class Runner:
                 self.log.step(step["id"], ms=(time.monotonic() - started) * 1000, skipped="target not on the page")
                 return
         if do != "goto":
-            self.fence()  # a redirect since the last step must not receive input
+            self.preflight()  # a redirect or human check since the last step must not receive input
         before = len(self.br.context.pages)
         getattr(self, "do_" + do)(step, timeout, extra)
         if len(self.br.context.pages) > before:  # the click opened a tab: follow it
@@ -568,6 +580,7 @@ class Runner:
         note = self.guard(self._label(loc, step["target"]), step)
         if note:
             extra["guard"] = note
+        self.preflight()
         loc.click(timeout=timeout * 1000)
         self._settle(timeout)
 
@@ -578,6 +591,7 @@ class Runner:
         if why:
             raise Stop(f"step '{step['id']}': the kit never types here ({why}). The user types this by hand "
                        "(log in once with `web.py open --show`).", needs_human=True)
+        self.preflight()
         loc.fill(text, timeout=timeout * 1000)
         extra["chars"] = len(text)
 
@@ -587,18 +601,24 @@ class Runner:
         focus = loc or self.page.locator(":focus").first
         has_focus = loc is not None or focus.count() > 0
         last = key.split("+")[-1].lower()
-        if last in {"enter", "numpadenter", "space", " "}:
-            # Enter or Space activates the focused button or link and can submit its form:
-            # guard on the element's own name plus the form's submit buttons.
-            own = self._label(focus, step.get("target") or {}) if has_focus else ""
+        own = self._label(focus, step.get("target") or {}) if has_focus else ""
+        editable = bool(has_focus and focus.evaluate(EDITABLE_JS))
+        if last in {"enter", "numpadenter", "space", " "} or step.get("publish") or \
+                (last in {"delete", "backspace"} and not editable):
+            # Enter or Space activates the focused control and can submit its form; Delete on a
+            # selected item can remove it; a step marked publish is always guarded.
             submits = focus.evaluate(FORM_SUBMITS_JS) if has_focus else self.page.evaluate(FORM_SUBMITS_JS, None)
-            note = self.guard(" | ".join(x for x in (own, submits) if x), step)
+            label = " | ".join(x for x in (own, submits) if x) or f"{key} key"
+            if last in {"delete", "backspace"}:
+                label = f"delete ({key} key) | {label}"
+            note = self.guard(label, step)
             if note:
                 extra["guard"] = note
-        elif len(last) == 1 and has_focus:  # a typed character: same rule as fill
+        if last not in NON_TYPING_KEYS and has_focus:  # it types (a letter, Digit1, Meta+V paste): same rule as fill
             why = sensitive_field(focus.evaluate(FIELD_INFO_JS))
             if why:
                 raise Stop(f"step '{step['id']}': the kit never types here ({why}).", needs_human=True)
+        self.preflight()
         if loc:
             loc.press(key, timeout=timeout * 1000)
         else:
@@ -608,6 +628,10 @@ class Runner:
     def do_select(self, step: dict[str, Any], timeout: float, extra: dict[str, Any]) -> None:
         loc = self.resolve(step, timeout)
         option = str(step["option"])
+        note = self.guard(f"{option} | {self._label(loc, step['target'])}", step)
+        if note:
+            extra["guard"] = note
+        self.preflight()
         try:
             loc.select_option(label=option, timeout=timeout * 1000)
         except Exception:
@@ -615,7 +639,9 @@ class Runner:
         extra["option"] = option
 
     def do_hover(self, step: dict[str, Any], timeout: float, extra: dict[str, Any]) -> None:
-        self.resolve(step, timeout).hover(timeout=timeout * 1000)
+        loc = self.resolve(step, timeout)
+        self.preflight()
+        loc.hover(timeout=timeout * 1000)
 
     def do_check(self, step: dict[str, Any], timeout: float, extra: dict[str, Any]) -> None:
         pass
@@ -684,6 +710,8 @@ class Runner:
                 end = time.monotonic() + timeout
                 while self._value(loc, {}) == first_seen and time.monotonic() < end:
                     time.sleep(0.15)
+                if self._value(loc, {}) == first_seen:
+                    raise Stop(f"step '{step['id']}': page {page_no + 1} did not load new rows after 'next'")
             first_seen = self._value(loc, {})
             want = limit - len(rows)
             if fast:
@@ -701,6 +729,7 @@ class Runner:
             if not nxt.count():
                 break
             self.guard(self._label(nxt.first, step["next"]), step)
+            self.preflight()
             nxt.first.click(timeout=timeout * 1000)
             self._settle(timeout)
             self.fence()
@@ -722,6 +751,9 @@ class Runner:
         extra["candidates"] = len(texts)
         if index is None:
             raise Stop(f"step '{step['id']}': Jev found no clear match among {len(texts)} candidates")
+        again = loc.evaluate_all(ATTRS_JS, step["attr"]) if step.get("attr") else loc.evaluate_all(NAMES_JS)
+        if again != texts:
+            raise Stop(f"step '{step['id']}': the candidates changed while Jev was choosing; nothing clicked")
         chosen = loc.nth(index)
         href = (loc.evaluate_all(HREFS_JS) or [None] * len(texts))[index]
         self.log.save(step.get("save_as", step["id"]), {"index": index, "text": texts[index], "href": href})
@@ -729,6 +761,7 @@ class Runner:
             note = self.guard(self._label(chosen, {}) or texts[index], step, picked=True)
             if note:
                 extra["guard"] = note
+            self.preflight()
             chosen.click(timeout=timeout * 1000)
             self._settle(timeout)
 

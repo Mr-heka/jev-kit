@@ -125,7 +125,7 @@ def validate_request(body: Any) -> dict[str, Any]:
 def _lookup_key() -> str:
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if key:
-        return key
+        return _checked(key)
     command = os.environ.get("JEV_KEY_COMMAND", "").strip()
     if not command:
         raise JevError("key_missing", "set OPENROUTER_API_KEY or JEV_KEY_COMMAND")
@@ -136,6 +136,13 @@ def _lookup_key() -> str:
     key = result.stdout.strip() if result.returncode == 0 else ""
     if not key or "\n" in key:
         raise JevError("key_command_failed")
+    return _checked(key)
+
+
+def _checked(key: str) -> str:
+    """A key is printable ASCII with no spaces; anything else could end up in an error message."""
+    if not all(33 <= ord(ch) <= 126 for ch in key):
+        raise JevError("key_invalid", "the key contains spaces, line breaks or other unusual characters")
     return key
 
 
@@ -172,6 +179,8 @@ def _request(url: str, payload: dict[str, Any] | None) -> Any:
         raise JevError("http_error", status=exc.code) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise JevError("network_error") from None
+    except ValueError:  # e.g. a header Python refuses; its message could contain the header value
+        raise JevError("request_failed") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise JevError("response_too_large")
     try:

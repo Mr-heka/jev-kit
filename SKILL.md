@@ -100,7 +100,7 @@ independent decisions at once: `jev.py batch manifest.json` (dry run), then
   that exact action. The engines stop at any such button. Show the user what
   will happen, record their words with
   `jev.py approve <id> --recipe <name> --quote "..."`, then rerun with
-  `--approved <id>`. One approval covers one run of that one recipe.
+  `--approved <id>`. One approval covers one run of that exact recipe file.
 - **Mark commits the guard cannot see.** The guard reads button text. When mapping,
   set `"publish": true` on any step whose button commits something under a neutral
   name ("Continue", "Next", "Confirm" icons).

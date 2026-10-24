@@ -163,7 +163,10 @@ class TestKeysAndFields(unittest.TestCase):
         self.assertIn("submit", screen.submit_label("cmd+enter"))
         self.assertIn("delete", screen.submit_label("cmd+delete"))
         self.assertIsNone(screen.submit_label("escape"))
-        self.assertIsNone(screen.submit_label("delete"))
+        self.assertIn("delete", screen.submit_label("delete"))
+        self.assertTrue(screen.switches_app("cmd+tab"))
+        self.assertTrue(screen.switches_app("command+space"))
+        self.assertFalse(screen.switches_app("cmd+a"))
 
     def test_read_field(self):
         region = [0, 0, 1, 0.3]
@@ -290,10 +293,10 @@ class EngineCase(unittest.TestCase):
             p.stop()
         self.tmp.cleanup()
 
-    def run_steps(self, steps, io, approved=None, decide=None, app="Calculator"):
+    def run_steps(self, steps, io, approved=None, decide=None, app="Calculator", name="test"):
         args = argparse.Namespace(approved=approved, timeout=0.3, stay=False, max_jev_calls=5, max_jev_cost=0.1,
                                   no_jev=False, budget=common.Budget(5, 0.1, decide_fn=decide or fake_jev()))
-        recipe = common.validate_recipe({"name": "test", "engine": "screen", "app": app, "steps": steps,
+        recipe = common.validate_recipe({"name": name, "engine": "screen", "app": app, "steps": steps,
                                          "read_only": not any(s.get("publish") for s in steps)})
         result, _eng = screen.execute(recipe, args, io=io)
         return result
@@ -312,9 +315,44 @@ class TestEngine(EngineCase):
         res = self.run_steps([{"id": "send", "do": "tap", "target": {"text": "Send"}}], io)
         self.assertEqual(res["status"], "needs_human")
         self.assertEqual(io.clicks, [])
-        ok = self.run_steps([{"id": "send", "do": "tap", "target": {"text": "Send"},
-                              "safe_because": "test fixture"}], FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]))
+        still = self.run_steps([{"id": "send", "do": "tap", "target": {"text": "Send"},
+                                 "safe_because": "test fixture"}], FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]))
+        self.assertEqual(still["status"], "needs_human", "safe_because never waives Send")
+        ok = self.run_steps([{"id": "submit", "do": "tap", "target": {"text": "Submit"},
+                              "safe_because": "search box"}], FakeIO(KEYPAD + [box("Submit", 20, 380, 50, 16)]))
         self.assertEqual(ok["status"], "done")
+
+    def test_app_switch_shortcut_refused(self):
+        io = FakeIO(KEYPAD)
+        res = self.run_steps([{"id": "switch", "do": "key", "keys": ["cmd+tab", "x"]}], io)
+        self.assertEqual(res["status"], "stopped")
+        self.assertEqual(io.keys, [])
+
+    def test_paste_shortcut_respects_secret_labels(self):
+        io = FakeIO(KEYPAD + [box("Password", 20, 400, 60, 16)])
+        res = self.run_steps([{"id": "paste", "do": "key", "keys": "cmd+v"}], io)
+        self.assertEqual(res["status"], "needs_human")
+        self.assertEqual(io.keys, [])
+
+    def test_publish_marked_key_and_plain_delete_guarded(self):
+        for step in ({"id": "del", "do": "key", "keys": "delete"},
+                     {"id": "x", "do": "key", "keys": "escape", "publish": True}):
+            io = FakeIO(KEYPAD)
+            res = self.run_steps([step], io)
+            self.assertEqual(res["status"], "needs_human", step)
+            self.assertEqual(io.keys, [])
+
+    def test_pick_rechecked_after_jev_answers(self):
+        io = FakeIO(KEYPAD + [box("Help", 20, 380, 40, 16), box("Adapter", 20, 420, 60, 16)])
+        inner = fake_jev("c2")
+
+        def swap(state, questions):  # the screen changes while Jev is thinking
+            io.boxes = KEYPAD + [box("Help", 20, 380, 40, 16), box("Buy now", 20, 420, 60, 16)]
+            return inner(state, questions)
+        res = self.run_steps([{"id": "pick", "do": "pick", "candidates_regex": "Help|Adapter",
+                               "instructions": "Which is the adapter?"}], io, decide=swap)
+        self.assertEqual(res["status"], "stopped")
+        self.assertEqual(io.clicks, [])
 
     def test_typed_keys_respect_secret_labels(self):
         io = FakeIO(KEYPAD + [box("PIN", 20, 400, 30, 16)])
@@ -329,14 +367,15 @@ class TestEngine(EngineCase):
         self.assertFalse(screen.denied_app("com.apple.calculator"))
 
     def test_approval_allows_once_then_is_used(self):
-        common.approve("calc-ok", "yes, send it", "test")
+        common.approve("calc-ok", "yes, send it", "step")
         step = [{"id": "send", "do": "tap", "target": {"text": "Send"}, "publish": True}]
         io = FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)])
-        self.assertEqual(self.run_steps(step, io, approved="calc-ok")["status"], "done")
+        self.assertEqual(self.run_steps(step, io, approved="calc-ok", name="step")["status"], "done")
         self.assertEqual(len(io.clicks), 1)
         self.assertFalse(common.approval_valid("calc-ok"))
+        common._CLAIMED.clear()  # as if a second run in another process
         self.assertEqual(self.run_steps(step, FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]),
-                                        approved="calc-ok")["status"], "needs_human")
+                                        approved="calc-ok", name="step")["status"], "needs_human")
 
     def test_return_key_is_guarded(self):
         io = FakeIO(KEYPAD)

@@ -266,9 +266,21 @@ def submit_label(combo: str) -> str | None:
     mods, _code, key = parse_combo(combo)
     if key in ("return", "enter", "space"):  # both activate the focused button
         return f"submit ({combo} key)"
-    if key in ("delete", "backspace", "forwarddelete") and any(m[1] == MODS["cmd"][1] for m in mods):
-        return f"delete ({combo} shortcut)"
+    if key in ("delete", "backspace", "forwarddelete"):  # plain Delete removes a selected item in many apps
+        return f"delete ({combo} key)"
     return None
+
+
+# Shortcuts that move input to another app, Space or window. Refused: the next key would land there.
+SWITCH_COMBOS = {("cmd", "tab"), ("cmd", "`"), ("cmd", "space"), ("ctrl", "space"), ("cmd", "h"), ("cmd", "q"),
+                 ("cmd", "m"), ("ctrl", "up"), ("ctrl", "down"), ("ctrl", "left"), ("ctrl", "right")}
+
+
+def switches_app(combo: str) -> bool:
+    parts = [p for p in re.split(r"\+(?=.)", combo.strip().lower())] if len(combo.strip()) > 1 else [combo.lower()]
+    *mods, key = parts
+    mods = ["cmd" if m in ("command", "meta") else "ctrl" if m == "control" else m for m in mods]
+    return any((m, key) in SWITCH_COMBOS for m in mods)
 
 
 def _digits(text: str) -> str:
@@ -796,7 +808,8 @@ class Engine:
         raise Stop(f"the point to click is covered by {who}, not {self.app}'s window; no click sent")
 
     def guard(self, label: str, step: dict[str, Any], picked: bool = False) -> None:
-        note = common.guard_click(label, step, self.args.approved, picked=picked, recipe=self.log.data.get("recipe"))
+        recipe = self.log.data.get("recipe_id") or self.log.data.get("recipe")
+        note = common.guard_click(label, step, self.args.approved, picked=picked, recipe=recipe)
         if note:
             self.extra.setdefault("guard", []).append(note)
             if note.startswith("approved:"):
@@ -911,16 +924,18 @@ class Engine:
         if not combos:
             raise Stop(f"step '{step['id']}' needs keys, e.g. \"return\" or \"cmd+a\"")
         for combo in combos:
-            label = submit_label(str(combo))
+            if switches_app(str(combo)):
+                raise Stop(f"refused: '{combo}' switches to another app, Space or window; recipes stay in {self.app}")
+            label = submit_label(str(combo)) or (f"{combo} key" if step.get("publish") else None)
             if label:
                 self.guard(label, step)
-        if any(len(str(c)) == 1 or re.fullmatch(r"(?:shift\+)?.", str(c), re.I) for c in combos):
-            self.refuse_secret(self.observe(), None)  # typed characters: same rule as `type`
+        if any(len(parse_combo(str(c))[2]) == 1 for c in combos):  # it types or pastes (cmd+v): same rule as `type`
+            self.refuse_secret(self.observe(), None)
         if self.win is None:
             self.observe()
         self._begin_input()
-        self.ensure_front()
         for combo in combos:
+            self.ensure_front()  # every key: the app is still in front, nothing has taken focus
             self.io.key(str(combo))
             time.sleep(0.03)
 
@@ -1039,8 +1054,14 @@ class Engine:
         b = cands[index]
         self.extra["picked"] = b["text"]
         if step.get("then", "tap") == "tap":
-            px, py = center(b)
-            self.click_at(s, px, py, b, step, picked=True)
+            fresh = self.settle()  # the screen may have changed while Jev was answering
+            bx, by = center(b)
+            same = [c for c in fresh.boxes if c["text"] == b["text"] and abs(center(c)[0] - bx) <= 8
+                    and abs(center(c)[1] - by) <= 8]
+            if not same:
+                raise Stop(f"'{b['text']}' moved or changed while Jev was choosing; nothing tapped")
+            px, py = center(same[0])
+            self.click_at(fresh, px, py, same[0], step, picked=True)
         else:
             self.log.save(step.get("save_as", step["id"]), {"text": b["text"], **public_box(b, s.win)})
 
@@ -1264,7 +1285,7 @@ def cmd_step(args: argparse.Namespace) -> int:
         raise Stop("a step is a JSON object with a 'do'")
     step = common.fill(step, common.parse_params(args.param))
     step.setdefault("id", step["do"])
-    recipe = {"name": "screen-step", "engine": "screen", "app": args.app, "steps": [step]}
+    recipe = {"name": "step", "engine": "screen", "app": args.app, "steps": [step]}  # one-off approvals use --recipe step
     carry = common.RUNS / "screen-step" / "saved.json"  # saved values carry over between step calls
     saved: dict[str, Any] = {}
     if carry.is_file() and not args.fresh:

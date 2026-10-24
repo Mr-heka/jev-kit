@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -153,16 +154,67 @@ class WebEngineTest(unittest.TestCase):
         self.assertEqual(blocked["status"], "needs_human")
         self.assertIn("approve", blocked["stopped"]["reason"])
         self.assertIn("Not ordered yet", blocked["stopped"]["screen_text"])
-        common.approve("test-order-wrong", "yes, but for another recipe", "other-recipe")
+        lookalike = Path(TMP) / "lookalike" / "order.json"  # same name, different file
+        lookalike.parent.mkdir(exist_ok=True)
+        lookalike.write_text(json.dumps({"name": "order", "engine": "web", "read_only": False,
+                                         "allow_domains": ["127.0.0.1"], "steps": [{"do": "wait"}]}))
+        common.approve("test-order-wrong", "yes, but for another recipe", str(lookalike))
         wrong = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-wrong")
-        self.assertEqual(wrong["status"], "needs_human", "an approval only covers its own recipe")
-        common.approve("test-order-1", "yes, place the fixture order", "order")
+        self.assertEqual(wrong["status"], "needs_human", "an approval only covers its own recipe file")
+        self.recipe("order", steps, read_only=False)
+        common.approve("test-order-1", "yes, place the fixture order", str(Path(TMP) / "order.json"))
         allowed = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-1")
         self.assertEqual(allowed["status"], "done", allowed.get("stopped"))
         self.assertTrue(allowed["steps"][-1]["guard"].startswith("approved"))
         self.assertFalse(common.approval_valid("test-order-1"), "the approval is used up by the run")
+        common._CLAIMED.clear()  # the next run is a new process
         again = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-1")
         self.assertEqual(again["status"], "needs_human")
+
+    def test_human_check_stops_before_any_input(self) -> None:
+        result = self.run_recipe(self.recipe("captcha", [
+            self.go("captcha.html"), {"id": "tick", "do": "click", "target": {"css": "#robot"}}]))
+        self.assertEqual(result["status"], "needs_human")
+        self.assertIn("Untouched", result["stopped"]["screen_text"])
+
+    def test_target_found_only_after_redirect_gets_no_input(self) -> None:
+        result = self.run_recipe(self.recipe("redirect-wait", [
+            self.go("redirect.html"), {"id": "email", "do": "fill", "target": {"label": "Email"}, "text": "a@b.c"}]))
+        self.assertEqual(result["status"], "stopped")
+        self.assertIn("left the allowed sites", result["stopped"]["reason"])
+        self.assertNotIn("chars", json.dumps(result["steps"]))
+
+    def test_publish_marked_key_and_select_guarded(self) -> None:
+        for step in ({"id": "del", "do": "press", "key": "Delete", "publish": True,
+                      "target": {"role": "button", "name": "Buy now"}},
+                     {"id": "del2", "do": "press", "key": "Delete", "target": {"role": "button", "name": "Buy now"}}):
+            result = self.run_recipe(self.recipe("keys", [self.go("risky.html"), step], read_only=False))
+            self.assertEqual(result["status"], "needs_human", step["id"])
+
+    def test_named_and_paste_keys_into_a_secret_field_refused(self) -> None:
+        for key in ("Digit1", "Meta+V", "Control+V"):
+            result = self.run_recipe(self.recipe("pin2", [
+                self.go("risky.html"), {"id": "k", "do": "press", "key": key, "target": {"label": "PIN"}}]))
+            self.assertEqual(result["status"], "needs_human", key)
+
+    def test_pagination_that_does_not_advance_stops(self) -> None:
+        result = self.run_recipe(self.recipe("stuck", [
+            self.go("stuck.html"), {"id": "rows", "do": "collect", "rows": {"css": "li.item"}, "fields": {"t": {}},
+                                    "next": {"role": "link", "name": "Next"}, "pages": 2, "timeout": 1}]))
+        self.assertEqual(result["status"], "stopped")
+        self.assertIn("did not load new rows", result["stopped"]["reason"])
+
+    def test_pick_rechecked_after_jev_answers(self) -> None:
+        class SlowJev(FakeJev):
+            def __call__(self, state, questions):
+                time.sleep(0.8)  # the list reshuffles at 0.4 s
+                return super().__call__(state, questions)
+        result = self.run_recipe(self.recipe("shuffle", [
+            self.go("shuffle.html"), {"id": "pick", "do": "pick", "from": {"css": "a.r"},
+                                      "instructions": "Which is the travel adapter?"}]), SlowJev(word="Adapter"))
+        self.assertEqual(result["status"], "stopped", result.get("stopped"))
+        self.assertIn("changed while Jev", result["stopped"]["reason"])
+        self.assertNotIn("WRONG", result["stopped"].get("screen_text", ""))
 
     def test_enter_and_space_on_a_buy_button_are_guarded(self) -> None:
         for key in ("Enter", "Space"):
