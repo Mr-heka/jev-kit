@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-MODEL = os.environ.get("JEV_MODEL", "typesafe/jev-1.13")
+MODEL = os.environ.get("JEV_MODEL", "typesafe/jev-1.14")  # pin another version with JEV_MODEL
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 KEY_URL = "https://openrouter.ai/api/v1/key"
 MAX_INPUT_BYTES = 64 * 1024

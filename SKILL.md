@@ -121,7 +121,8 @@ independent decisions at once: `jev.py batch manifest.json` (dry run), then
 `jev.py doctor` shows what is installed. `jev.py doctor --online` also checks the
 key with OpenRouter (no inference, no spend). The key comes from
 `OPENROUTER_API_KEY`, or `JEV_KEY_COMMAND` (a command that prints it, for a
-password manager). First install: [SETUP-PROMPT.md](SETUP-PROMPT.md). The block
+password manager). The kit calls Jev 1.14 (`typesafe/jev-1.14`); set `JEV_MODEL`
+to pin another version, for example after tuning thresholds on one. First install: [SETUP-PROMPT.md](SETUP-PROMPT.md). The block
 that makes routing automatic in `CLAUDE.md` or `AGENTS.md`:
 [AGENTS-SNIPPET.md](AGENTS-SNIPPET.md). Finding Jev uses in a project:
 [references/ideas.md](references/ideas.md).

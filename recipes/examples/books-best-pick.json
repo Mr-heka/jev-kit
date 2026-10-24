@@ -137,7 +137,8 @@
    "context": {
     "reader_goal": "{want}"
    },
-   "save_as": "best"
+   "save_as": "best",
+   "required": false
   }
  ]
 }
