@@ -121,6 +121,10 @@ VALUE_JS = "(e, a) => (a === 'href' || a === 'src') && e[a] ? e[a] : (a ? e.getA
 NON_TYPING_KEYS = {"enter", "numpadenter", "tab", "escape", "esc", "arrowup", "arrowdown", "arrowleft", "arrowright",
                    "home", "end", "pageup", "pagedown", "delete", "backspace", "shift", "control", "alt", "meta",
                    "capslock", "insert", "contextmenu", *(f"f{n}" for n in range(1, 13))}
+OPTION_JS = """(e, want) => { const opts = [...(e.options || [])];
+  let i = opts.findIndex(o => o.label.trim() === want); if (i < 0) i = opts.findIndex(o => o.value === want);
+  return i < 0 ? null : {index: i, label: opts[i].label.trim() || opts[i].value}; }"""
+FRAME_JS = "(e) => ['iframe', 'frame', 'object', 'embed'].includes(e.tagName.toLowerCase())"
 EDITABLE_JS = "(e) => !!e && (e.isContentEditable || ['input', 'textarea', 'select'].includes(e.tagName.toLowerCase()))"
 FIELD_INFO_JS = """(e) => ({tag: e.tagName.toLowerCase(), type: (e.getAttribute('type') || '').toLowerCase(),
   autocomplete: e.getAttribute('autocomplete') || '', name: e.getAttribute('name') || '', id: e.id || '',
@@ -456,10 +460,19 @@ class Runner:
         if not domain_allowed(url, self.allow):
             raise Stop(f"left the allowed sites: now on {host_of(url)}, allowed {', '.join(self.allow)}")
 
+    def frames_text(self) -> str:
+        out = []
+        for frame in self.page.frames[1:]:  # embedded frames: a human check can live in one
+            try:
+                out.append(frame.evaluate("() => document.body ? document.body.innerText : ''") or "")
+            except Exception:
+                continue
+        return "\n".join(out)
+
     def preflight(self) -> None:
-        """Right before any input: still on an allowed site, and no human check on screen."""
+        """Right before any input: still on an allowed site, and no human check on the page or in a frame."""
         self.fence()
-        common.check_human_gate(self.page_text())
+        common.check_human_gate(self.page_text() + "\n" + self.frames_text())
 
     def guard(self, label: str, step: dict[str, Any], picked: bool = False) -> str | None:
         recipe = self.log.data.get("recipe_id") or self.log.data.get("recipe")
@@ -550,6 +563,9 @@ class Runner:
             if count > 1:
                 raise Stop(f"step '{step['id']}': target matches {count} elements; add \"nth\" or a tighter name "
                            f"(run `web.py snapshot`)")
+        if loc.first.evaluate(FRAME_JS):
+            raise Stop(f"step '{step['id']}': the target is an embedded frame; the kit never clicks or types into "
+                       "one, because its contents are not checked")
         return loc.first
 
     def _label(self, loc: Any, target: dict[str, Any]) -> str:
@@ -628,15 +644,15 @@ class Runner:
     def do_select(self, step: dict[str, Any], timeout: float, extra: dict[str, Any]) -> None:
         loc = self.resolve(step, timeout)
         option = str(step["option"])
-        note = self.guard(f"{option} | {self._label(loc, step['target'])}", step)
+        match = loc.evaluate(OPTION_JS, option)  # the option that will be chosen, by label first, then value
+        if not match:
+            raise Stop(f"step '{step['id']}': no option labelled or valued '{option}'")
+        note = self.guard(f"{match['label']} | {self._label(loc, step['target'])}", step)
         if note:
             extra["guard"] = note
         self.preflight()
-        try:
-            loc.select_option(label=option, timeout=timeout * 1000)
-        except Exception:
-            loc.select_option(value=option, timeout=timeout * 1000)
-        extra["option"] = option
+        loc.select_option(index=match["index"], timeout=timeout * 1000)
+        extra["option"] = match["label"]
 
     def do_hover(self, step: dict[str, Any], timeout: float, extra: dict[str, Any]) -> None:
         loc = self.resolve(step, timeout)
@@ -745,6 +761,7 @@ class Runner:
         except Exception:
             raise Stop(f"step '{step['id']}': no candidates match {common.clip(step['from'], 120)}") from None
         texts = loc.evaluate_all(ATTRS_JS, step["attr"]) if step.get("attr") else loc.evaluate_all(NAMES_JS)
+        dests = loc.evaluate_all(HREFS_JS)
         index, answer = common.jev_pick(self.budget, step["instructions"], texts, step.get("context"),
                                         float(step.get("threshold", 0.6)))
         extra["jev"] = answer
@@ -752,7 +769,7 @@ class Runner:
         if index is None:
             raise Stop(f"step '{step['id']}': Jev found no clear match among {len(texts)} candidates")
         again = loc.evaluate_all(ATTRS_JS, step["attr"]) if step.get("attr") else loc.evaluate_all(NAMES_JS)
-        if again != texts:
+        if again != texts or loc.evaluate_all(HREFS_JS) != dests:
             raise Stop(f"step '{step['id']}': the candidates changed while Jev was choosing; nothing clicked")
         chosen = loc.nth(index)
         href = (loc.evaluate_all(HREFS_JS) or [None] * len(texts))[index]

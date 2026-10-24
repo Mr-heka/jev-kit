@@ -366,16 +366,31 @@ class TestEngine(EngineCase):
         self.assertTrue(screen.denied_app("com.mitchellh.ghostty"))
         self.assertFalse(screen.denied_app("com.apple.calculator"))
 
+    def _approved_run(self, approval, io):
+        path = Path(self.tmp.name) / "send-it.json"
+        path.write_text(json.dumps({"name": "send-it", "engine": "screen", "app": "Calculator", "read_only": False,
+                                    "steps": [{"id": "send", "do": "tap", "target": {"text": "Send"}, "publish": True}]}))
+        args = argparse.Namespace(approved=approval, timeout=0.3, stay=False, max_jev_calls=5, max_jev_cost=0.1,
+                                  no_jev=False, budget=common.Budget(5, 0.1, decide_fn=fake_jev()))
+        return screen.execute(common.load_recipe(str(path)), args, io=io)[0], path
+
     def test_approval_allows_once_then_is_used(self):
-        common.approve("calc-ok", "yes, send it", "step")
-        step = [{"id": "send", "do": "tap", "target": {"text": "Send"}, "publish": True}]
+        with self.assertRaises(Stop):  # one-off steps never publish
+            common.approve("calc-ok", "yes, send it", "step")
+        _, path = self._approved_run(None, FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]))
+        common.approve("calc-ok", "yes, send it", str(path))
         io = FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)])
-        self.assertEqual(self.run_steps(step, io, approved="calc-ok", name="step")["status"], "done")
+        self.assertEqual(self._approved_run("calc-ok", io)[0]["status"], "done")
         self.assertEqual(len(io.clicks), 1)
         self.assertFalse(common.approval_valid("calc-ok"))
-        common._CLAIMED.clear()  # as if a second run in another process
-        self.assertEqual(self.run_steps(step, FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]),
-                                        approved="calc-ok", name="step")["status"], "needs_human")
+        again = self._approved_run("calc-ok", FakeIO(KEYPAD + [box("Send", 20, 380, 40, 16)]))[0]
+        self.assertEqual(again["status"], "needs_human", "used up, even in the same process")
+
+    def test_tab_in_typed_text_refused(self):
+        io = FakeIO(KEYPAD)
+        res = self.run_steps([{"id": "t", "do": "type", "text": "alice\tpa55word"}], io)
+        self.assertEqual(res["status"], "stopped")
+        self.assertEqual(io.typed, [])
 
     def test_return_key_is_guarded(self):
         io = FakeIO(KEYPAD)

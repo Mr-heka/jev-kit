@@ -103,10 +103,12 @@ The result has `status` (`stopped` or `needs_human`), `stopped.step`,
 ## Approvals
 
 `jev.py approve <id> --recipe <name> --quote "<the user's own words>"` records a
-yes for one publishing run of that exact recipe file: editing the recipe after the
-yes voids it. It is valid for 48 hours and is claimed (used up) at the first
-guarded click it allows, so a second run cannot use it even if both start at once.
-Use `--recipe step` for one-off `step` commands. Rerun with `--approved <id>`.
+yes for one publishing run of that exact recipe file with the exact values it will
+use (`--param name=value`, the same ones the run gets). Editing the recipe or
+changing a value after the yes voids it. It is valid for 48 hours and is claimed
+(used up) at the first guarded click it allows, so no second run can use it.
+One-off `step` commands never publish: put the step in a recipe, save it, approve
+that recipe and run it. Rerun with `--approved <id>`.
 Without it, the engines stop at any button that sends, buys, books, posts or
 deletes, whatever the recipe says.
 

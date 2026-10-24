@@ -29,7 +29,7 @@ JSON on stdout. Exit 0 done, 2 stopped or needs a person, 1 error.
 | `click` | `target` | Goes through the publish guard |
 | `fill` | `target`, `text` | Refuses password, one-time code, card, CVV, expiry, bank, account and tax file fields, and any text that looks like a card number |
 | `press` | `key`, optional `target` | Enter and Space are guarded on the element and its form's submit buttons; Delete outside a text field is guarded. Keys that type (letters, `Digit1`, `Meta+V`) get the same secret-field check as `fill` |
-| `select` | `target`, `option` | Matches the option label first, then its value. The option text goes through the guard |
+| `select` | `target`, `option` | Matches the option label first, then its value. The visible text of the option that will be chosen goes through the guard |
 | `hover` | `target` | |
 | `check` | (none) | Only runs `expect` and `judge` |
 | `scroll` | `pixels` | Positive scrolls down. Default 700 |
@@ -133,3 +133,5 @@ wording fix after the first live runs.
   browser when no session is open. About 1.6 s of the 2.4 s is Jev (8 calls, 4 at a time).
 - The guard reads button and link text. A button with a neutral name ("Continue",
   "Next", an icon) that commits something is invisible to it: mark that step `publish: true` when mapping.
+- Embedded frames (iframes) are never clicked or typed into, because their contents
+  are not checked. Human checks inside frames still stop a run.

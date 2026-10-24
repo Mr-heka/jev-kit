@@ -897,6 +897,9 @@ class Engine:
         text = str(step.get("text", ""))
         if not text:
             raise Stop(f"step '{step['id']}' has no text to type")
+        if re.search(r"[\t\x00-\x08\x0b-\x1f\x7f]", text):  # a Tab would move on to an unchecked field
+            raise Stop(f"step '{step['id']}': typed text cannot contain Tab or control characters; "
+                       "use one step per field so each field is checked")
         self.focus_field(step, timeout)
         if "\n" in text or "\r" in text:
             self.guard("submit (return key in typed text)", step)

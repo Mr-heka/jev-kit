@@ -53,7 +53,7 @@ clipboard (only if a `paste` changed it) and the app that was in front.
 | `tap`, `double_tap`, `long_press` | `target`, `hold` | Waits until the target is on screen and still across two reads, then clicks its centre. Every tap goes through the publish guard |
 | `type` | `text`, optional `target` | Unicode key events, so any character works. With a `target`, it is clicked first to focus. A newline counts as Return and is guarded |
 | `paste` | `text`, optional `target` | Puts the text on the clipboard and sends a real cmd+v. The clipboard is restored after the run |
-| `key` | `keys`: `"escape"`, `"cmd+a"` or a list | Real modifier key down and up events. Return, Enter, Space and Delete go through the publish guard. Keys that type or paste (cmd+v) get the secret-label check. Shortcuts that leave the app (cmd+Tab, cmd+Space, cmd+H, cmd+Q, Spaces) are refused |
+| `key` | `keys`: `"escape"`, `"cmd+a"` or a list | Real modifier key down and up events. Return, Enter, Space and Delete go through the publish guard. Keys that type or paste (cmd+v) get the secret-label check. Shortcuts that leave the app (cmd+Tab, cmd+Space, cmd+H, cmd+Q, Spaces) are refused. `type` text cannot contain Tab: one step per field |
 | `scroll` | `pixels`, `at: [fx, fy]` | Pixel wheel events. Positive scrolls down. Default 400 at the window centre |
 | `scroll_until` | `target`, `max`, `pixels` | Scrolls until the target shows; a settle read after each scroll |
 | `drag` | `target`, `to: {dx, dy}` or `{frac}` or a target | Slow stepped drag inside the window (sliders, lists) |

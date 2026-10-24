@@ -171,6 +171,34 @@ class WebEngineTest(unittest.TestCase):
         again = self.run_recipe(self.recipe("order", steps, read_only=False), approved="test-order-1")
         self.assertEqual(again["status"], "needs_human")
 
+    def test_select_is_guarded_on_the_visible_option(self) -> None:
+        result = self.run_recipe(self.recipe("sel", [
+            self.go("forms.html"), {"id": "pick-d", "do": "select", "target": {"label": "Actions"}, "option": "d"}]))
+        self.assertEqual(result["status"], "needs_human")
+        self.assertIn("Nothing yet", result["stopped"]["screen_text"])
+        ok = self.run_recipe(self.recipe("sel", [
+            self.go("forms.html"), {"id": "pick-n", "do": "select", "target": {"label": "Actions"}, "option": "Nothing"},
+            {"id": "seen", "do": "check", "expect": {"all": ["CHOSEN n"]}}]))
+        self.assertEqual(ok["status"], "done", ok.get("stopped"))
+
+    def test_embedded_frames_are_never_clicked(self) -> None:
+        result = self.run_recipe(self.recipe("frame", [
+            self.go("forms.html"), {"id": "shop", "do": "click", "target": {"css": "#shop"}}]))
+        self.assertEqual(result["status"], "stopped")
+        self.assertIn("embedded frame", result["stopped"]["reason"])
+        self.assertIn("Nothing yet", result["stopped"]["screen_text"])
+
+    def test_pick_stops_when_a_link_target_changes(self) -> None:
+        class SlowJev(FakeJev):
+            def __call__(self, state, questions):
+                time.sleep(0.8)
+                return super().__call__(state, questions)
+        result = self.run_recipe(self.recipe("relink", [
+            self.go("relink.html"), {"id": "pick", "do": "pick", "from": {"css": "a.r"},
+                                     "instructions": "Which is the travel adapter?"}]), SlowJev(word="Adapter"))
+        self.assertEqual(result["status"], "stopped", result.get("stopped"))
+        self.assertIn("changed while Jev", result["stopped"]["reason"])
+
     def test_human_check_stops_before_any_input(self) -> None:
         result = self.run_recipe(self.recipe("captcha", [
             self.go("captcha.html"), {"id": "tick", "do": "click", "target": {"css": "#robot"}}]))

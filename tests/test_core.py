@@ -181,6 +181,24 @@ class Guard(TempHome):
         with self.assertRaises(Stop):  # already claimed by the first run, even before it finished
             common.guard_click("Post", {"id": "x", "publish": True}, "post-1", recipe=demo_id)
 
+    def test_approval_bound_to_its_values(self):
+        common.RECIPES.mkdir(parents=True, exist_ok=True)
+        (common.RECIPES / "pay.json").write_text(json.dumps({
+            "name": "pay", "engine": "web", "read_only": False, "params": {"to": "Alice", "amount": "10"},
+            "steps": [{"do": "click", "publish": True, "target": {"text": "Pay {to} {amount}"}}]}))
+        common.approve("pay-1", "yes, pay Alice 10", "pay", {"to": "Alice", "amount": "10"})
+        self.assertFalse(common.claim_approval("pay-1", common.load_recipe("pay", {"to": "Mallory", "amount": "900"})["_id"]))
+        self.assertTrue(common.claim_approval("pay-1", common.load_recipe("pay", {"to": "Alice", "amount": "10"})["_id"]))
+
+    def test_unknown_cost_still_counts(self):
+        def nocost(state, questions):
+            return {"model": "m", "answers": {"c": {"type": "noul", "noul": 0.9}}, "usage": {}, "elapsed": 0}
+        budget = common.Budget(max_cost=0.0015, decide_fn=nocost)
+        budget.decide({}, {"c": {"type": "noul", "instructions": "x"}})
+        with self.assertRaises(Stop):
+            budget.decide({}, {"c": {"type": "noul", "instructions": "x"}})
+        self.assertEqual(budget.unknown_cost, 2, "the second call is counted, then its answer is rejected")
+
     def test_approval_bound_to_exact_recipe_file(self):
         self._recipe("demo", "real")
         common.approve("ok-1", "yes", "demo")

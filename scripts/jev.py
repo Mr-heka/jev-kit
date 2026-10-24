@@ -211,7 +211,7 @@ def cmd_save(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_approve(args: argparse.Namespace) -> dict[str, Any]:
-    entry = common.approve(args.id, args.quote, args.recipe)
+    entry = common.approve(args.id, args.quote, args.recipe, common.parse_params(args.param))
     return {"status": "done", "approval": entry,
             "note": f"valid once, for {common.APPROVAL_HOURS} hours, for {args.recipe} only: rerun with --approved {args.id}"}
 
@@ -271,7 +271,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("approve", help="record the user's yes for one publishing run")
     p.add_argument("id")
-    p.add_argument("--recipe", required=True, help="the recipe this yes covers ('step' for one-off steps)")
+    p.add_argument("--recipe", required=True, help="the recipe this yes covers")
+    p.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
+                   help="the exact values the run will use; a run with other values is not covered")
     p.add_argument("--quote", required=True)
     p.set_defaults(fn=cmd_approve)
     return parser

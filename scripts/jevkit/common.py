@@ -75,7 +75,7 @@ def clip(text: Any, limit: int) -> str:
 
 def _write_json(path: Path, data: Any, private: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     if private:
         os.chmod(tmp, 0o600)
@@ -171,7 +171,8 @@ def validate_recipe(data: Any, source: str = "recipe") -> dict[str, Any]:
 def load_recipe(name_or_path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
     path = find_recipe(name_or_path)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise Stop(f"could not read recipe {path}: {exc}") from None
     validate_recipe(data, str(path))
@@ -184,12 +185,14 @@ def load_recipe(name_or_path: str, params: dict[str, str] | None = None) -> dict
     out["name"] = data.get("name") or path.stem
     out["_path"] = str(path)
     out["_params"] = merged
-    out["_id"] = recipe_identity(path, out["name"])
+    out["_id"] = recipe_identity(raw, out["name"], merged)
     return out
 
 
-def recipe_identity(path: Path, name: str) -> str:
-    return f"{name}@{hashlib.sha256(path.read_bytes()).hexdigest()[:16]}"
+def recipe_identity(raw: bytes, name: str, params: dict[str, str]) -> str:
+    """The exact recipe file and the exact values it runs with. Change either and an approval no longer fits."""
+    digest = hashlib.sha256(raw + b"\0" + json.dumps(params, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+    return f"{name}@{digest.hexdigest()[:16]}"
 
 
 def parse_params(pairs: list[str] | None) -> dict[str, str]:
@@ -296,23 +299,22 @@ def _ledger_lock():
 _CLAIMED: set[tuple[str, str]] = set()
 
 
-def approve(approval_id: str, quote: str, recipe: str) -> dict[str, Any]:
-    """Record the user's own words approving one publishing run of one exact recipe file."""
+def approve(approval_id: str, quote: str, recipe: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    """Record the user's own words approving one publishing run of one exact recipe file and its values."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,80}", approval_id):
         raise Stop("approval ids are 3-80 letters, digits, dots, dashes or underscores")
     if not quote.strip():
         raise Stop("an approval needs the user's own words in --quote")
     if not recipe.strip():
-        raise Stop("an approval names the recipe it covers (--recipe NAME, or 'step' for one-off steps)")
+        raise Stop("an approval names the recipe it covers (--recipe NAME)")
     if recipe.strip() == "step":
-        identity, where = "step", None
-    else:
-        path = find_recipe(recipe.strip())
-        name = json.loads(path.read_text(encoding="utf-8")).get("name") or path.stem
-        identity, where = recipe_identity(path, name), str(path)
+        raise Stop("one-off steps never publish: put the step in a recipe, save it, approve that recipe, then run it")
+    loaded = load_recipe(recipe.strip(), params)
+    identity, where = loaded["_id"], loaded["_path"]
     with _ledger_lock():
         ledger = _ledger()
-        ledger[approval_id] = {"quote": quote.strip(), "recipe": identity, "path": where, "at": now_iso(),
+        ledger[approval_id] = {"quote": quote.strip(), "recipe": identity, "path": where,
+                               "params": loaded["_params"], "at": now_iso(),
                                "epoch": time.time(), "used": False}
         _write_json(APPROVALS, ledger, private=True)
     return {"id": approval_id, **ledger[approval_id]}
@@ -420,7 +422,8 @@ class RunLog:
     """One JSON file per run, rewritten after every step so a stop leaves a trail."""
 
     def __init__(self, recipe: dict[str, Any], engine: str):
-        self.stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
+        _CLAIMED.clear()  # a claim covers one run, never the next run in the same process
         self.dir = RUNS / (re.sub(r"[^A-Za-z0-9._-]+", "-", str(recipe["name"])).strip(".-") or "recipe")
         self.path = self.dir / f"{self.stamp}.json"
         self.t0 = time.monotonic()
@@ -515,10 +518,11 @@ class Budget:
                 self.inflight -= 1
         with self._lock:
             cost = result.get("usage", {}).get("cost")
-            if cost is None:
+            if cost is None:  # unknown: count it at the dearest call seen (at least US$0.001) so the cap still binds
                 self.unknown_cost += 1
-            self.last_cost = max(self.last_cost, float(cost or 0))
-            self.cost += float(cost or 0)
+                cost = max(self.last_cost, 0.001)
+            self.last_cost = max(self.last_cost, float(cost))
+            self.cost += float(cost)
             if self.cost > self.max_cost:
                 raise Stop(f"Jev cost cap passed by the last call (US${self.cost:.4f} of US${self.max_cost}); "
                            "its answer was not used")
