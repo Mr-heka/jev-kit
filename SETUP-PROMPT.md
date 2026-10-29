@@ -26,13 +26,20 @@ Do not replace or delete any of my existing skills or instructions.
    a password-manager command that prints it. Never ask me to paste the key into chat,
    a file, source code or Git.
 7. Run: python3 <kit>/scripts/jev.py doctor --online and show me the result.
-8. Show me the block from AGENTS-SNIPPET.md with the real kit path filled in, and ask
-   before adding it to my global CLAUDE.md (Claude Code) or AGENTS.md (Codex).
-   Add it once; if a Jev block is already there, update it instead of adding a second.
+8. My CLAUDE.md (Claude Code: ~/.claude/CLAUDE.md) or AGENTS.md (Codex: ~/.codex/AGENTS.md)
+   is my own instructions file, read at the start of every chat. This step is what
+   makes Jev work without me asking. Explain that in one line, show me the block from
+   AGENTS-SNIPPET.md with the real kit path filled in, and add it on my yes. Create the
+   file if I don't have one. Keep everything already in it. If a Jev block is already
+   there, update it instead of adding a second. Read the file back to prove it is in.
 9. Ask before the demo, which makes about 12 Jev calls (well under US$0.01):
    python3 <kit>/scripts/web.py run books-best-pick
    Show me the winning book, the run time and the cost.
-10. Tell me in three lines: where it is installed, what it will now do automatically,
+10. If you have a built-in browser (the Claude app's Browser pane), prove it: open
+    https://books.toscrape.com in it, click into the Travel category, scrape the book
+    titles and prices yourself, and send them to jev.py judge to pick the best one for
+    a first-time traveller. Show me what came back.
+11. Tell me in three lines: where it is installed, what it will now do automatically,
     and how to map my first flow ("map this for next time" while you do a browser task).
 
 Do not add hooks, background services or MCP servers. Keep writing, code,

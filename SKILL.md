@@ -32,6 +32,7 @@ done, 2 means stopped and handed back to you, 1 means an error.
 | --- | --- |
 | A browser or app flow that has a recipe (`jev.py recipes`) | **Replay it** (lane 1) |
 | A browser or app flow that will come up again | Do it once while **recording**, save, replay (lane 1) |
+| A one-off browse, click-through or scrape, or a site the user logs in to while watching | Do it yourself in the host's **built-in browser** ([references/built-in-browser.md](references/built-in-browser.md)) |
 | Many items needing the same judgment: rank, sort, match, pick the best | **Judge** (lane 2) |
 | One fuzzy check inside your own loop ("is this the right page?") | `jev.py decide` (lane 3) |
 | Exact facts: prices, dates, totals, IDs, if/then rules | Code, never Jev |
@@ -66,6 +67,12 @@ screenshot and the screen text, so you take over from exactly there.
    `jev.py save <name> --about "..." --templatize "Travel=category"` turns the
    literal values into parameters. Replay it once before you call it done.
    Full format: [references/recipes.md](references/recipes.md).
+
+Built-in browser: in the Claude desktop app (tools named `mcp__Claude_Browser__*`)
+or any host with its own browser pane, click, fill and scrape there yourself while
+the user watches, send scraped piles to lane 2, and turn a flow that will repeat
+into a `web.py` recipe. The pane and `web.py` do not share logins. How, and the
+rules you keep there: [references/built-in-browser.md](references/built-in-browser.md).
 
 Logins: the kit never types passwords. For a site that needs one, run
 `web.py open --show`, let the user log in by hand once, and later runs reuse
@@ -122,9 +129,14 @@ independent decisions at once: `jev.py batch manifest.json` (dry run), then
 key with OpenRouter (no inference, no spend). The key comes from
 `OPENROUTER_API_KEY`, or `JEV_KEY_COMMAND` (a command that prints it, for a
 password manager). The kit calls Jev 1.14 (`typesafe/jev-1.14`); set `JEV_MODEL`
-to pin another version, for example after tuning thresholds on one. First install: [SETUP-PROMPT.md](SETUP-PROMPT.md). The block
-that makes routing automatic in `CLAUDE.md` or `AGENTS.md`:
-[AGENTS-SNIPPET.md](AGENTS-SNIPPET.md). Finding Jev uses in a project:
+to pin another version, for example after tuning thresholds on one. First install: [SETUP-PROMPT.md](SETUP-PROMPT.md).
+
+The user's `CLAUDE.md` (Claude Code, `~/.claude/CLAUDE.md`) or `AGENTS.md` (Codex,
+`~/.codex/AGENTS.md`) is their own instructions file, read at the start of every
+chat. The Jev block from [AGENTS-SNIPPET.md](AGENTS-SNIPPET.md) belongs there:
+without it you only use Jev when asked. If the block is missing, offer to add it
+(show it, add it once on their yes, keep everything else in the file). If an older
+Jev block is there, update that one instead of adding a second. Finding Jev uses in a project:
 [references/ideas.md](references/ideas.md).
 
 Made by Selr AI. MIT licence.

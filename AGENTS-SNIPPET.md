@@ -16,6 +16,11 @@ The jev-kit skill is installed at <KIT>. Use it without being asked:
   then fix the step.
 - No recipe and the task will come up again: map it while you do it
   (`step --record`), save it with `jev.py save`, and replay it once to prove it.
+- If you have a built-in browser (the Claude app's Browser pane), use it to
+  open pages, click buttons, fill searches and scrape on your own while I watch.
+  Do the clicking yourself; never send me steps to click. I log in there myself
+  when a site needs it. Send scraped piles to `jev.py judge`, and turn a flow
+  that will repeat into a recipe.
 - Many items needing the same judgment (rank results, sort messages, pick the
   best option, check claims against sources): filter exact facts in code, then
   `jev.py judge`. Look at anything flagged before you answer.

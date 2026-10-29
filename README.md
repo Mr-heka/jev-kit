@@ -29,9 +29,16 @@ few. Near ties and low confidence are flagged for your agent to check.
 
 **3. One quick decision.** Typed questions from inside your agent's own work.
 
-**4. Routing.** A short block for your `CLAUDE.md` or `AGENTS.md` tells your agent
-to check for a recipe before any browser task, record new ones, and send piles of
-items to the judge, without you asking each time.
+**4. The built-in browser.** In the Claude desktop app your agent opens pages,
+clicks buttons, fills searches and scrapes in the app's own browser pane while you
+watch, then hands the scraped pile to the judge. You log in there yourself when a
+site needs it. Flows that repeat become recipes.
+
+**5. Routing.** A short block for your `CLAUDE.md` or `AGENTS.md` (your own
+instructions file, read at the start of every chat) tells your agent to check for
+a recipe before any browser task, use the built-in browser on its own, record new
+flows, and send piles of items to the judge, without you asking each time. The
+setup prompt adds it for you after you say yes.
 
 ## Measured on our machine (24 Oct 2026)
 
@@ -78,7 +85,7 @@ and for web replay `pip install playwright`. The screen engine is Mac only.
 | `scripts/jev.py` | decide, batch, judge, recipes, save, approve, doctor |
 | `scripts/web.py` | Web engine: open, snapshot, step, run |
 | `scripts/screen.py` | Mac screen engine: screen, step, run |
-| `references/` | Recipe format, both engines, the judge, question shapes |
+| `references/` | Recipe format, both engines, the built-in browser, the judge, question shapes |
 | `recipes/examples/` | Demo recipes |
 | `tests/` | Offline tests: `python3 -m unittest discover tests` |
 
